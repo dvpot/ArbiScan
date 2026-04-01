@@ -28,12 +28,17 @@ public sealed class ScannerWorker : BackgroundService
     private readonly IOpportunityRepository _repository;
     private readonly IReportExporter _exporter;
     private readonly ISummaryGenerator _summaryGenerator;
+    private readonly ITelegramNotifier _telegramNotifier;
+    private readonly TelegramSettings _telegramSettings;
     private readonly ILogger<ScannerWorker> _logger;
 
     private readonly Dictionary<ExchangeId, OrderBookSyncStatus> _previousStatuses = new();
     private DataHealthFlags _previousHealthFlags = DataHealthFlags.None;
     private bool _previousHealthy = true;
     private DateTimeOffset _startedAtUtc;
+    private string _lastStopReason = "Normal shutdown";
+    private int _closedWindowCount;
+    private MarketDataSnapshot? _latestMarketSnapshot;
 
     public ScannerWorker(
         AppSettings settings,
@@ -45,6 +50,8 @@ public sealed class ScannerWorker : BackgroundService
         IOpportunityRepository repository,
         IReportExporter exporter,
         ISummaryGenerator summaryGenerator,
+        ITelegramNotifier telegramNotifier,
+        TelegramSettings telegramSettings,
         ILogger<ScannerWorker> logger)
     {
         _settings = settings;
@@ -56,6 +63,8 @@ public sealed class ScannerWorker : BackgroundService
         _repository = repository;
         _exporter = exporter;
         _summaryGenerator = summaryGenerator;
+        _telegramNotifier = telegramNotifier;
+        _telegramSettings = telegramSettings;
         _logger = logger;
     }
 
@@ -66,11 +75,13 @@ public sealed class ScannerWorker : BackgroundService
         var nextHourlySummaryAtUtc = RoundUpToHour(_startedAtUtc);
         var nextDailySummaryAtUtc = RoundUpToDay(_startedAtUtc);
         var nextCumulativeSummaryAtUtc = _startedAtUtc.AddSeconds(_settings.CumulativeSummaryIntervalSeconds);
+        var nextHeartbeatAtUtc = _startedAtUtc.AddMinutes(_telegramSettings.HeartbeatIntervalMinutes);
 
         try
         {
             await _repository.InitializeAsync(stoppingToken);
             await PersistHealthEventAsync(new HealthEvent(_startedAtUtc, HealthEventType.ApplicationStarted, null, DataHealthFlags.None, true, "Scanner started"), stoppingToken);
+            await NotifyStartupAsync(stoppingToken);
 
             await _binanceAdapter.InitializeAsync(stoppingToken);
             await _bybitAdapter.InitializeAsync(stoppingToken);
@@ -81,6 +92,7 @@ public sealed class ScannerWorker : BackgroundService
             {
                 var nowUtc = DateTimeOffset.UtcNow;
                 var marketSnapshot = BuildMarketSnapshot(nowUtc);
+                _latestMarketSnapshot = marketSnapshot;
 
                 await DetectHealthTransitionsAsync(marketSnapshot, stoppingToken);
 
@@ -98,6 +110,7 @@ public sealed class ScannerWorker : BackgroundService
                         var closedWindows = _lifetimeTracker.Process(_settings.Symbol, evaluation, _settings);
                         foreach (var window in closedWindows)
                         {
+                            _closedWindowCount++;
                             await PersistWindowEventAsync(window, stoppingToken);
                         }
                     }
@@ -121,12 +134,25 @@ public sealed class ScannerWorker : BackgroundService
                     nextCumulativeSummaryAtUtc = nowUtc.AddSeconds(_settings.CumulativeSummaryIntervalSeconds);
                 }
 
+                if (_telegramNotifier.IsEnabled && nowUtc >= nextHeartbeatAtUtc)
+                {
+                    await _telegramNotifier.SendMessageAsync(BuildHeartbeatMessage(marketSnapshot), stoppingToken);
+                    nextHeartbeatAtUtc = nowUtc.AddMinutes(_telegramSettings.HeartbeatIntervalMinutes);
+                }
+
                 await Task.Delay(_settings.ScanIntervalMs, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            _lastStopReason = "Cancellation requested or host shutdown";
             _logger.LogInformation("Scanner cancellation requested");
+        }
+        catch (Exception ex)
+        {
+            _lastStopReason = Shorten(ex.Message, 240);
+            await NotifyCriticalErrorAsync(ex, CancellationToken.None);
+            throw;
         }
         finally
         {
@@ -231,6 +257,16 @@ public sealed class ScannerWorker : BackgroundService
                     currentHealthy,
                     currentHealthy ? "Scanner recovered to healthy state" : $"Scanner degraded: {snapshot.HealthFlags}"),
                 cancellationToken);
+
+            if (_telegramNotifier.IsEnabled && _telegramSettings.NotifyOnHealthStateChanges)
+            {
+                await _telegramNotifier.SendMessageAsync(
+                    currentHealthy
+                        ? $"ArbiScan status: WORKING\nSymbol: {_settings.Symbol}\nHealth: healthy"
+                        : $"ArbiScan status: DEGRADED\nSymbol: {_settings.Symbol}\nFlags: {snapshot.HealthFlags}",
+                    cancellationToken);
+            }
+
             _previousHealthy = currentHealthy;
         }
     }
@@ -329,11 +365,13 @@ public sealed class ScannerWorker : BackgroundService
         var nowUtc = DateTimeOffset.UtcNow;
         foreach (var window in _lifetimeTracker.Flush(_settings.Symbol, nowUtc, _settings))
         {
+            _closedWindowCount++;
             await PersistWindowEventAsync(window, cancellationToken);
         }
 
         await GenerateSummaryAsync(SummaryPeriod.Cumulative, _startedAtUtc, nowUtc, cancellationToken);
         await PersistHealthEventAsync(new HealthEvent(nowUtc, HealthEventType.ApplicationStopping, null, DataHealthFlags.None, true, "Scanner stopping"), cancellationToken);
+        await NotifyShutdownAsync(cancellationToken);
 
         await _binanceAdapter.StopAsync(cancellationToken);
         await _bybitAdapter.StopAsync(cancellationToken);
@@ -352,4 +390,67 @@ public sealed class ScannerWorker : BackgroundService
         var truncated = new DateTimeOffset(timestampUtc.Year, timestampUtc.Month, timestampUtc.Day, 0, 0, 0, TimeSpan.Zero);
         return truncated <= timestampUtc ? truncated.AddDays(1) : truncated;
     }
+
+    private async Task NotifyStartupAsync(CancellationToken cancellationToken)
+    {
+        if (!_telegramNotifier.IsEnabled || !_telegramSettings.NotifyOnStartup)
+        {
+            return;
+        }
+
+        await _telegramNotifier.SendMessageAsync(
+            $"ArbiScan started\nSymbol: {_settings.Symbol}\nMode: {_settings.RuntimeMode}\nStatus: starting",
+            cancellationToken);
+    }
+
+    private async Task NotifyShutdownAsync(CancellationToken cancellationToken)
+    {
+        if (!_telegramNotifier.IsEnabled || !_telegramSettings.NotifyOnShutdown)
+        {
+            return;
+        }
+
+        await _telegramNotifier.SendMessageAsync(
+            $"ArbiScan stopped\nSymbol: {_settings.Symbol}\nReason: {_lastStopReason}\nClosed windows: {_closedWindowCount}",
+            cancellationToken);
+    }
+
+    private async Task NotifyCriticalErrorAsync(Exception exception, CancellationToken cancellationToken)
+    {
+        if (!_telegramNotifier.IsEnabled || !_telegramSettings.NotifyOnCriticalError)
+        {
+            return;
+        }
+
+        await _telegramNotifier.SendMessageAsync(
+            $"ArbiScan critical error\nSymbol: {_settings.Symbol}\nType: {exception.GetType().Name}\nMessage: {Shorten(exception.Message, 500)}",
+            cancellationToken);
+    }
+
+    private string BuildHeartbeatMessage(MarketDataSnapshot snapshot)
+    {
+        static string DescribeExchange(ExchangeMarketSnapshot? exchangeSnapshot)
+        {
+            if (exchangeSnapshot is null)
+            {
+                return "n/a";
+            }
+
+            return $"{exchangeSnapshot.OrderBook.Status}, age={Math.Round(exchangeSnapshot.OrderBook.DataAge.TotalMilliseconds)}ms, " +
+                   $"bid={exchangeSnapshot.OrderBook.BestBid?.Price:0.########}/{exchangeSnapshot.OrderBook.BestBid?.Quantity:0.########}, " +
+                   $"ask={exchangeSnapshot.OrderBook.BestAsk?.Price:0.########}/{exchangeSnapshot.OrderBook.BestAsk?.Quantity:0.########}";
+        }
+
+        return
+            $"ArbiScan heartbeat\n" +
+            $"Symbol: {_settings.Symbol}\n" +
+            $"Health: {(snapshot.HealthFlags == DataHealthFlags.None ? "healthy" : snapshot.HealthFlags)}\n" +
+            $"Binance: {DescribeExchange(snapshot.Binance)}\n" +
+            $"Bybit: {DescribeExchange(snapshot.Bybit)}\n" +
+            $"Closed windows: {_closedWindowCount}\n" +
+            $"Uptime: {Math.Round((DateTimeOffset.UtcNow - _startedAtUtc).TotalMinutes)} min";
+    }
+
+    private static string Shorten(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength];
 }

@@ -68,10 +68,12 @@ Base settings live in:
 
 - `ArbiScan.Scanner/appsettings.json`
 - `config/appsettings.example.json`
+- `config/telegramsettings.example.json`
 
 Production override file should be placed in the mounted config folder:
 
 - `/srv/ArbiScan/config/appsettings.json`
+- `/srv/ArbiScan/config/telegramsettings.json`
 
 Secrets should come from environment variables or a private config override:
 
@@ -79,6 +81,34 @@ Secrets should come from environment variables or a private config override:
 - `ArbiScan__Binance__ApiSecret`
 - `ArbiScan__Bybit__ApiKey`
 - `ArbiScan__Bybit__ApiSecret`
+- `TelegramBot__BotToken`
+
+## Telegram Notifications
+
+Telegram uses a separate config file and works with exactly one allowed user/chat id.
+
+Config file:
+
+- `/srv/ArbiScan/config/telegramsettings.json`
+
+Fields:
+
+- `Enabled`
+- `BotToken`
+- `AllowedUserId`
+- `HeartbeatIntervalMinutes`
+- `NotifyOnStartup`
+- `NotifyOnShutdown`
+- `NotifyOnCriticalError`
+- `NotifyOnHealthStateChanges`
+
+Notifications sent:
+
+- bot startup
+- bot shutdown with probable reason
+- critical errors in short form
+- health state transitions
+- periodic heartbeat with symbol, health, order book status, best bid/ask, data age and closed window count
 
 ## Reports
 
@@ -135,6 +165,7 @@ Prepare host directories:
 ```bash
 mkdir -p /srv/ArbiScan/config /srv/ArbiScan/logs /srv/ArbiScan/data /srv/ArbiScan/reports
 cp config/appsettings.example.json /srv/ArbiScan/config/appsettings.json
+cp config/telegramsettings.example.json /srv/ArbiScan/config/telegramsettings.json
 cp .env.example .env
 ```
 

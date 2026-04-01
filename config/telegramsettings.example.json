@@ -1,0 +1,12 @@
+{
+  "TelegramBot": {
+    "Enabled": false,
+    "BotToken": "",
+    "AllowedUserId": 0,
+    "HeartbeatIntervalMinutes": 30,
+    "NotifyOnStartup": true,
+    "NotifyOnShutdown": true,
+    "NotifyOnCriticalError": true,
+    "NotifyOnHealthStateChanges": true
+  }
+}

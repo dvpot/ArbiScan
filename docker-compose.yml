@@ -13,6 +13,7 @@ services:
       ArbiScan__Binance__ApiSecret: ${ARBISCAN_BINANCE_API_SECRET:-}
       ArbiScan__Bybit__ApiKey: ${ARBISCAN_BYBIT_API_KEY:-}
       ArbiScan__Bybit__ApiSecret: ${ARBISCAN_BYBIT_API_SECRET:-}
+      TelegramBot__BotToken: ${TELEGRAM_BOT_TOKEN:-}
     volumes:
       - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/config:/app/storage/config
       - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/logs:/app/storage/logs

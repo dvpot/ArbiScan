@@ -111,6 +111,27 @@ public sealed class ReportSettings
     public bool WriteJsonLinesExports { get; init; } = true;
 }
 
+public sealed class TelegramSettings
+{
+    public bool Enabled { get; init; }
+
+    [Required]
+    public string BotToken { get; init; } = string.Empty;
+
+    public long AllowedUserId { get; init; }
+
+    [Range(1, 1440)]
+    public int HeartbeatIntervalMinutes { get; init; } = 30;
+
+    public bool NotifyOnStartup { get; init; } = true;
+
+    public bool NotifyOnShutdown { get; init; } = true;
+
+    public bool NotifyOnCriticalError { get; init; } = true;
+
+    public bool NotifyOnHealthStateChanges { get; init; } = true;
+}
+
 public sealed class ExchangeConnectionSettings
 {
     public bool Enabled { get; init; } = true;
