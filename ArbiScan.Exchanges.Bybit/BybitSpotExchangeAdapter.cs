@@ -117,16 +117,19 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
             return null;
         }
 
+        var capturedAtUtc = DateTimeOffset.UtcNow;
+        var dataAge = CalculateDataAge(capturedAtUtc, _orderBook.UpdateTime, _orderBook.UpdateServerTime, _orderBook.DataAge);
+
         return new ExchangeMarketSnapshot(
             ExchangeId.Bybit,
             Rules,
             new OrderBookSnapshot(
                 _symbol,
                 MapStatus(_orderBook.Status),
-                DateTimeOffset.UtcNow,
+                capturedAtUtc,
                 _orderBook.UpdateTime,
                 _orderBook.UpdateServerTime,
-                _orderBook.DataAge ?? TimeSpan.MaxValue,
+                dataAge,
                 _orderBook.Bids.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray(),
                 _orderBook.Asks.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray()));
     }
@@ -173,4 +176,20 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
             OrderBookStatus.Disposed => OrderBookSyncStatus.Disposed,
             _ => OrderBookSyncStatus.Unknown
         };
+
+    private static TimeSpan CalculateDataAge(
+        DateTimeOffset capturedAtUtc,
+        DateTimeOffset? updateTimeUtc,
+        DateTimeOffset? updateServerTimeUtc,
+        TimeSpan? fallbackDataAge)
+    {
+        var updatedAtUtc = updateTimeUtc ?? updateServerTimeUtc;
+        if (updatedAtUtc.HasValue)
+        {
+            var age = capturedAtUtc - updatedAtUtc.Value;
+            return age < TimeSpan.Zero ? TimeSpan.Zero : age;
+        }
+
+        return fallbackDataAge ?? TimeSpan.MaxValue;
+    }
 }

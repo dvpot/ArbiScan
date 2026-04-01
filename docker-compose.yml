@@ -1,9 +1,6 @@
 services:
   arbiscan:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: arbiscan:latest
+    image: ${ARBISCAN_IMAGE:-arbiscan:latest}
     container_name: arbiscan
     restart: unless-stopped
     environment:

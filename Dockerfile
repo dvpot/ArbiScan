@@ -8,8 +8,10 @@ RUN dotnet publish ArbiScan.Scanner/ArbiScan.Scanner.csproj -c Release -o /app/p
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
 
+ARG APP_VERSION=1.0.0-local
 ENV DOTNET_ENVIRONMENT=Production
 ENV ArbiScan__Storage__RootPath=/app/storage
+ENV ARBISCAN_VERSION=$APP_VERSION
 
 COPY --from=build /app/publish/ ./
 

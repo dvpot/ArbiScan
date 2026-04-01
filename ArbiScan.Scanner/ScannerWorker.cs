@@ -262,8 +262,8 @@ public sealed class ScannerWorker : BackgroundService
             {
                 await _telegramNotifier.SendMessageAsync(
                     currentHealthy
-                        ? $"ArbiScan status: WORKING\nSymbol: {_settings.Symbol}\nHealth: healthy"
-                        : $"ArbiScan status: DEGRADED\nSymbol: {_settings.Symbol}\nFlags: {snapshot.HealthFlags}",
+                        ? $"ArbiScan v{AppVersion.Current} status: WORKING\nSymbol: {_settings.Symbol}\nHealth: healthy"
+                        : $"ArbiScan v{AppVersion.Current} status: DEGRADED\nSymbol: {_settings.Symbol}\nFlags: {snapshot.HealthFlags}",
                     cancellationToken);
             }
 
@@ -399,7 +399,7 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         await _telegramNotifier.SendMessageAsync(
-            $"ArbiScan started\nSymbol: {_settings.Symbol}\nMode: {_settings.RuntimeMode}\nStatus: starting",
+            $"ArbiScan v{AppVersion.Current} started\nSymbol: {_settings.Symbol}\nMode: {_settings.RuntimeMode}\nStatus: starting",
             cancellationToken);
     }
 
@@ -411,7 +411,7 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         await _telegramNotifier.SendMessageAsync(
-            $"ArbiScan stopped\nSymbol: {_settings.Symbol}\nReason: {_lastStopReason}\nClosed windows: {_closedWindowCount}",
+            $"ArbiScan v{AppVersion.Current} stopped\nSymbol: {_settings.Symbol}\nReason: {_lastStopReason}\nClosed windows: {_closedWindowCount}",
             cancellationToken);
     }
 
@@ -423,7 +423,7 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         await _telegramNotifier.SendMessageAsync(
-            $"ArbiScan critical error\nSymbol: {_settings.Symbol}\nType: {exception.GetType().Name}\nMessage: {Shorten(exception.Message, 500)}",
+            $"ArbiScan v{AppVersion.Current} critical error\nSymbol: {_settings.Symbol}\nType: {exception.GetType().Name}\nMessage: {Shorten(exception.Message, 500)}",
             cancellationToken);
     }
 
@@ -442,7 +442,7 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         return
-            $"ArbiScan heartbeat\n" +
+            $"ArbiScan v{AppVersion.Current} heartbeat\n" +
             $"Symbol: {_settings.Symbol}\n" +
             $"Health: {(snapshot.HealthFlags == DataHealthFlags.None ? "healthy" : snapshot.HealthFlags)}\n" +
             $"Binance: {DescribeExchange(snapshot.Binance)}\n" +

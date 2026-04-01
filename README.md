@@ -20,6 +20,7 @@ It does not place orders. The service builds local order books, evaluates both d
 
 ## Current Stack
 
+- App version: auto-generated as `1.0.<git-commit-count>`
 - .NET SDK/runtime: `10.0.104 / 10.0.4`
 - `Binance.Net`: `12.11.1`
 - `Bybit.Net`: `6.10.0`
@@ -82,6 +83,7 @@ Secrets should come from environment variables or a private config override:
 - `ArbiScan__Bybit__ApiKey`
 - `ArbiScan__Bybit__ApiSecret`
 - `TelegramBot__BotToken`
+- `ARBISCAN_IMAGE`
 
 ## Telegram Notifications
 
@@ -172,7 +174,8 @@ cp .env.example .env
 Build and start:
 
 ```bash
-docker compose build
+chmod +x ./scripts/get-version.sh
+docker build --build-arg APP_VERSION="$(./scripts/get-version.sh)" -t arbiscan:latest .
 docker compose up -d
 ```
 
@@ -184,12 +187,47 @@ docker compose down
 
 ## VPS Deployment Notes
 
-1. Build the image locally or on the VPS with `docker compose build`.
+1. Push code to GitHub and let GitHub Actions publish `ghcr.io/dvpot/arbiscan`.
 2. Make sure the host directories under `/srv/ArbiScan` exist before first start.
-3. Put production config into `/srv/ArbiScan/config/appsettings.json`.
-4. Put API secrets into `.env` or environment variables.
-5. Start the service with `docker compose up -d`.
-6. Inspect logs with `docker compose logs -f arbiscan`.
+3. Set `ARBISCAN_IMAGE=ghcr.io/dvpot/arbiscan:latest` in `.env`.
+4. Put production config into `/srv/ArbiScan/config/appsettings.json`.
+5. Put API secrets into `.env` or environment variables.
+6. Pull and start with `docker compose pull && docker compose up -d`.
+7. Inspect logs with `docker compose logs -f arbiscan`.
+
+## GitHub Registry Deployment
+
+The repository includes a GitHub Actions workflow that:
+
+- builds and tests on pushes and pull requests;
+- publishes a Docker image to `GHCR` on pushes to `main` or `master`;
+- tags images as `<version>`, `latest` and `sha-<commit>`.
+
+Versioning is managed in:
+
+- `scripts/get-version.sh`
+
+The bot version is generated automatically from git history as `1.0.<commit-count>`. Every new commit increments the version without manual edits. The Docker image bakes that value into `ARBISCAN_VERSION`, the bot uses it in Telegram notifications, and the GitHub workflow uses it for image tags.
+
+Example VPS `.env`:
+
+```bash
+ARBISCAN_IMAGE=ghcr.io/dvpot/arbiscan:latest
+ARBISCAN_STORAGE_ROOT=/srv/ArbiScan
+ARBISCAN_BINANCE_API_KEY=...
+ARBISCAN_BINANCE_API_SECRET=...
+ARBISCAN_BYBIT_API_KEY=...
+ARBISCAN_BYBIT_API_SECRET=...
+TELEGRAM_BOT_TOKEN=...
+```
+
+Update on VPS:
+
+```bash
+cd /opt/ArbiScan
+sudo docker compose pull
+sudo docker compose up -d
+```
 
 ## Constraints And Assumptions
 
