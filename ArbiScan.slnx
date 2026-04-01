@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="ArbiScan.Core/ArbiScan.Core.csproj" />
+  <Project Path="ArbiScan.Exchanges.Binance/ArbiScan.Exchanges.Binance.csproj" />
+  <Project Path="ArbiScan.Exchanges.Bybit/ArbiScan.Exchanges.Bybit.csproj" />
+  <Project Path="ArbiScan.Infrastructure/ArbiScan.Infrastructure.csproj" />
+  <Project Path="ArbiScan.Scanner/ArbiScan.Scanner.csproj" />
+  <Project Path="ArbiScan.Tests/ArbiScan.Tests.csproj" />
+</Solution>

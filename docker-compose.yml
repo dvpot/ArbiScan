@@ -1,0 +1,20 @@
+services:
+  arbiscan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arbiscan:latest
+    container_name: arbiscan
+    restart: unless-stopped
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      ArbiScan__Storage__RootPath: /app/storage
+      ArbiScan__Binance__ApiKey: ${ARBISCAN_BINANCE_API_KEY:-}
+      ArbiScan__Binance__ApiSecret: ${ARBISCAN_BINANCE_API_SECRET:-}
+      ArbiScan__Bybit__ApiKey: ${ARBISCAN_BYBIT_API_KEY:-}
+      ArbiScan__Bybit__ApiSecret: ${ARBISCAN_BYBIT_API_SECRET:-}
+    volumes:
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/config:/app/storage/config
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/logs:/app/storage/logs
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/data:/app/storage/data
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/reports:/app/storage/reports
