@@ -1,0 +1,103 @@
+repo: ArbiScan
+branch: main
+latest_commit_sha: 9e2efd5353fff5c10bb665e3d1000e7306410967
+generated_at_utc: 2026-04-02T09:54:57Z
+
+.
+├── .dockerignore
+├── .env.example
+├── .github
+│   └── workflows
+│       └── build-test-publish.yml
+├── .gitignore
+├── ArbiScan.Core
+│   ├── ArbiScan.Core.csproj
+│   ├── Configuration
+│   │   └── AppSettings.cs
+│   ├── Enums
+│   │   ├── AnalysisMode.cs
+│   │   ├── ArbitrageDirection.cs
+│   │   ├── DataHealthFlags.cs
+│   │   ├── ExchangeId.cs
+│   │   ├── FillabilityStatus.cs
+│   │   ├── HealthEventType.cs
+│   │   ├── OrderBookSyncStatus.cs
+│   │   └── TradeSide.cs
+│   ├── Interfaces
+│   │   ├── IExchangeAdapter.cs
+│   │   ├── IFeeCalculator.cs
+│   │   ├── IFillableSizeCalculator.cs
+│   │   ├── IMarketDataSource.cs
+│   │   ├── IOpportunityDetector.cs
+│   │   ├── IOpportunityRepository.cs
+│   │   ├── IReportExporter.cs
+│   │   ├── ISummaryGenerator.cs
+│   │   ├── ISymbolRulesProvider.cs
+│   │   └── ITelegramNotifier.cs
+│   ├── Models
+│   │   ├── ActiveOpportunityWindow.cs
+│   │   ├── ExchangeMarketSnapshot.cs
+│   │   ├── ExchangeSymbolRules.cs
+│   │   ├── HealthEvent.cs
+│   │   ├── MarketDataSnapshot.cs
+│   │   ├── OpportunityEvaluation.cs
+│   │   ├── OpportunityPairEvaluation.cs
+│   │   ├── OpportunityWindowEvent.cs
+│   │   ├── OrderBookLevel.cs
+│   │   ├── OrderBookSnapshot.cs
+│   │   ├── OrderBookSnapshotRecord.cs
+│   │   ├── SummaryPeriod.cs
+│   │   ├── SummaryReport.cs
+│   │   ├── SweepResult.cs
+│   │   └── TradeLegEstimate.cs
+│   └── Services
+│       ├── ArbitrageDirectionExtensions.cs
+│       ├── FeeCalculator.cs
+│       ├── FillableSizeCalculator.cs
+│       ├── OpportunityDetector.cs
+│       ├── OpportunityLifetimeTracker.cs
+│       ├── QuoteStalenessTracker.cs
+│       ├── SummaryGenerator.cs
+│       └── SymbolRulesNormalizer.cs
+├── ArbiScan.Exchanges.Binance
+│   ├── ArbiScan.Exchanges.Binance.csproj
+│   └── BinanceSpotExchangeAdapter.cs
+├── ArbiScan.Exchanges.Bybit
+│   ├── ArbiScan.Exchanges.Bybit.csproj
+│   └── BybitSpotExchangeAdapter.cs
+├── ArbiScan.Infrastructure
+│   ├── ArbiScan.Infrastructure.csproj
+│   ├── Logging
+│   │   └── RollingFileLoggerProvider.cs
+│   ├── Persistence
+│   │   └── SqliteOpportunityRepository.cs
+│   ├── Reporting
+│   │   ├── JsonReportExporter.cs
+│   │   └── NullTelegramNotifier.cs
+│   └── Setup
+│       ├── AppStoragePaths.cs
+│       └── StoragePathBuilder.cs
+├── ArbiScan.Scanner
+│   ├── AppVersion.cs
+│   ├── ArbiScan.Scanner.csproj
+│   ├── Program.cs
+│   ├── Properties
+│   │   └── launchSettings.json
+│   ├── ScannerWorker.cs
+│   ├── TelegramBotNotifier.cs
+│   ├── appsettings.Development.json
+│   └── appsettings.json
+├── ArbiScan.Tests
+│   ├── ArbiScan.Tests.csproj
+│   ├── CoreMathTests.cs
+│   └── QuoteStalenessTrackerTests.cs
+├── ArbiScan.slnx
+├── Directory.Build.props
+├── Dockerfile
+├── README.md
+├── config
+│   ├── appsettings.example.json
+│   └── telegramsettings.example.json
+├── docker-compose.yml
+└── scripts
+    └── get-version.sh
