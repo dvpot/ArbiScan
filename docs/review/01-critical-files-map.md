@@ -15,7 +15,6 @@ generated_at_utc: 2026-04-02T09:54:57Z
 | `AppVersion` | `Scanner/AppVersion.cs` | Exposes runtime version baked into the container and used in notifications. |
 | GitHub publish/deploy workflow | `.github/workflows/build-test-publish.yml` | CI/CD bootstrap for restore/build/test, GHCR image publishing, and automatic VPS deploy on pushes to `main`/`master` when deploy secrets are configured. |
 | Docker runtime wiring | `Dockerfile`, `docker-compose.yml` | Container packaging and runtime mount/env wiring for VPS deployment. |
-| `docs/QUICK-HANDOFF.md` | `docs/QUICK-HANDOFF.md` | Project continuity file for new chats: current scope, deployment flow, VPS paths, latest completed work, and next analysis steps. |
 
 ## B. Background Processing / Workers / Schedulers
 

@@ -104,7 +104,6 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   └── telegramsettings.example.json
 ├── docker-compose.yml
 ├── docs
-│   ├── QUICK-HANDOFF.md
 │   └── review
 │       ├── 00-repo-tree.txt
 │       ├── 01-critical-files-map.md

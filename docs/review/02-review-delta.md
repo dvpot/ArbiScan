@@ -13,8 +13,7 @@ This file establishes the initial external review baseline and records only the 
 
 - Root project directories were renamed from `ArbiScan.*` to shorter operational names:
   `Core`, `Infrastructure`, `Exchanges.Binance`, `Exchanges.Bybit`, `Scanner`, `Tests`.
-- Review and handoff docs were grouped under `docs/`:
-  `docs/QUICK-HANDOFF.md`
+- Review docs were grouped under `docs/review/`:
   `docs/review/00-repo-tree.txt`
   `docs/review/01-critical-files-map.md`
   `docs/review/02-review-delta.md`
@@ -105,8 +104,6 @@ This file establishes the initial external review baseline and records only the 
   new telegram anti-drift/debounce config.
 - `config/telegramsettings.example.json`
   production-facing example for the new Telegram health notification controls.
-- `docs/QUICK-HANDOFF.md`
-  operational continuity file for future chats and deployment/runtime context.
 - `scripts/collect-analysis-bundle.sh`
   helper for packaging the runtime artifacts needed for deeper `BybitStale` analysis.
 - `Tests/QuoteStalenessTrackerTests.cs`

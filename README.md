@@ -35,7 +35,6 @@ It does not place orders. The service builds local order books, evaluates both d
 - `Scanner`: generic host, orchestration loop, health tracking
 - `Tests`: unit tests for math and summary aggregation
 - `docs/review`: external technical review navigation artifacts
-- `docs/QUICK-HANDOFF.md`: project continuity and deployment/runtime handoff
 
 ## Storage Layout On VPS
 
@@ -205,9 +204,9 @@ docker compose down
 
 ## VPS Deployment Notes
 
-1. Push code to GitHub and let GitHub Actions build, test, publish `ghcr.io/dvpot/arbiscan`, then auto-deploy on VPS over SSH.
+1. Push code to GitHub and let GitHub Actions build, test, publish `ghcr.io/<owner>/arbiscan`, then auto-deploy on VPS over SSH.
 2. Make sure the host directories under `/srv/ArbiScan` exist before first start.
-3. Set `ARBISCAN_IMAGE=ghcr.io/dvpot/arbiscan:latest` in `.env`.
+3. Set `ARBISCAN_IMAGE=ghcr.io/<owner>/arbiscan:latest` in `.env`.
 4. Put production config into `/srv/ArbiScan/config/appsettings.json`.
 5. Put API secrets into `.env` or environment variables.
 6. Configure GitHub Actions repository secrets:
@@ -235,7 +234,7 @@ The bot version is generated automatically from git history as `1.0.<commit-coun
 Example VPS `.env`:
 
 ```bash
-ARBISCAN_IMAGE=ghcr.io/dvpot/arbiscan:latest
+ARBISCAN_IMAGE=ghcr.io/<owner>/arbiscan:latest
 ARBISCAN_STORAGE_ROOT=/srv/ArbiScan
 ARBISCAN_BINANCE_API_KEY=...
 ARBISCAN_BINANCE_API_SECRET=...

@@ -6,6 +6,7 @@
 # dotenv files
 .env
 analysis-bundles/
+.local-context/
 
 # User-specific files
 *.rsuser
