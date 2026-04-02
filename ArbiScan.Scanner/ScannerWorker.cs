@@ -31,6 +31,7 @@ public sealed class ScannerWorker : BackgroundService
     private readonly ITelegramNotifier _telegramNotifier;
     private readonly TelegramSettings _telegramSettings;
     private readonly ILogger<ScannerWorker> _logger;
+    private readonly QuoteStalenessTracker _quoteStalenessTracker = new();
 
     private readonly Dictionary<ExchangeId, OrderBookSyncStatus> _previousStatuses = new();
     private DataHealthFlags _previousHealthFlags = DataHealthFlags.None;
@@ -165,6 +166,7 @@ public sealed class ScannerWorker : BackgroundService
         var binance = _binanceAdapter.GetSnapshot();
         var bybit = _bybitAdapter.GetSnapshot();
         var staleThreshold = TimeSpan.FromMilliseconds(_settings.QuoteStalenessThresholdMs);
+        var staleConfirmationWindow = TimeSpan.FromMilliseconds(_settings.QuoteStalenessConfirmationMs);
 
         var flags = DataHealthFlags.None;
 
@@ -180,7 +182,7 @@ public sealed class ScannerWorker : BackgroundService
                 flags |= DataHealthFlags.BinanceOutOfSync;
             }
 
-            if (binance.OrderBook.DataAge > staleThreshold)
+            if (IsStale(binance, capturedAtUtc, staleThreshold, staleConfirmationWindow))
             {
                 flags |= DataHealthFlags.BinanceStale;
             }
@@ -198,7 +200,7 @@ public sealed class ScannerWorker : BackgroundService
                 flags |= DataHealthFlags.BybitOutOfSync;
             }
 
-            if (bybit.OrderBook.DataAge > staleThreshold)
+            if (IsStale(bybit, capturedAtUtc, staleThreshold, staleConfirmationWindow))
             {
                 flags |= DataHealthFlags.BybitStale;
             }
@@ -220,6 +222,26 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         return new MarketDataSnapshot(_settings.Symbol, capturedAtUtc, binance, bybit, flags);
+    }
+
+    private bool IsStale(
+        ExchangeMarketSnapshot snapshot,
+        DateTimeOffset capturedAtUtc,
+        TimeSpan staleThreshold,
+        TimeSpan staleConfirmationWindow)
+    {
+        if (snapshot.OrderBook.Status != OrderBookSyncStatus.Synced)
+        {
+            _quoteStalenessTracker.Reset(snapshot.Exchange);
+            return false;
+        }
+
+        return _quoteStalenessTracker.IsStale(
+            snapshot.Exchange,
+            capturedAtUtc,
+            snapshot.OrderBook.DataAge,
+            staleThreshold,
+            staleConfirmationWindow);
     }
 
     private async Task DetectHealthTransitionsAsync(MarketDataSnapshot snapshot, CancellationToken cancellationToken)

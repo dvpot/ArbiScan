@@ -24,6 +24,9 @@ public sealed class AppSettings
     [Range(1, 86_400_000)]
     public int QuoteStalenessThresholdMs { get; init; } = 2_000;
 
+    [Range(0, 86_400_000)]
+    public int QuoteStalenessConfirmationMs { get; init; } = 3_000;
+
     [Range(1, 86_400_000)]
     public int MinWindowLifetimeMs { get; init; } = 1_000;
 
