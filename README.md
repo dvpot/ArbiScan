@@ -28,12 +28,14 @@ It does not place orders. The service builds local order books, evaluates both d
 
 ## Project Layout
 
-- `ArbiScan.Core`: domain models, interfaces, calculations, summaries
-- `ArbiScan.Infrastructure`: SQLite repository, JSON exporters, rolling file logger
-- `ArbiScan.Exchanges.Binance`: Binance spot metadata and local order book adapter
-- `ArbiScan.Exchanges.Bybit`: Bybit spot metadata and local order book adapter
-- `ArbiScan.Scanner`: generic host, orchestration loop, health tracking
-- `ArbiScan.Tests`: unit tests for math and summary aggregation
+- `Core`: domain models, interfaces, calculations, summaries
+- `Infrastructure`: SQLite repository, JSON exporters, rolling file logger
+- `Exchanges.Binance`: Binance spot metadata and local order book adapter
+- `Exchanges.Bybit`: Bybit spot metadata and local order book adapter
+- `Scanner`: generic host, orchestration loop, health tracking
+- `Tests`: unit tests for math and summary aggregation
+- `docs/review`: external technical review navigation artifacts
+- `docs/QUICK-HANDOFF.md`: project continuity and deployment/runtime handoff
 
 ## Storage Layout On VPS
 
@@ -68,7 +70,7 @@ Generated artifacts:
 
 Base settings live in:
 
-- `ArbiScan.Scanner/appsettings.json`
+- `Scanner/appsettings.json`
 - `config/appsettings.example.json`
 - `config/telegramsettings.example.json`
 
@@ -173,7 +175,7 @@ dotnet test ArbiScan.slnx
 
 ```bash
 ArbiScan__Storage__RootPath=/tmp/arbiscan-smoke \
-dotnet run --project ArbiScan.Scanner
+dotnet run --project Scanner/ArbiScan.Scanner.csproj
 ```
 
 ## Docker Run
@@ -203,13 +205,17 @@ docker compose down
 
 ## VPS Deployment Notes
 
-1. Push code to GitHub and let GitHub Actions publish `ghcr.io/dvpot/arbiscan`.
+1. Push code to GitHub and let GitHub Actions build, test, publish `ghcr.io/dvpot/arbiscan`, then auto-deploy on VPS over SSH.
 2. Make sure the host directories under `/srv/ArbiScan` exist before first start.
 3. Set `ARBISCAN_IMAGE=ghcr.io/dvpot/arbiscan:latest` in `.env`.
 4. Put production config into `/srv/ArbiScan/config/appsettings.json`.
 5. Put API secrets into `.env` or environment variables.
-6. Pull and start with `docker compose pull && docker compose up -d`.
-7. Inspect logs with `docker compose logs -f arbiscan`.
+6. Configure GitHub Actions repository secrets:
+   `ARBISCAN_VPS_HOST`, `ARBISCAN_VPS_USER`, `ARBISCAN_VPS_SSH_KEY`, `ARBISCAN_VPS_APP_DIR`
+7. The deploy job runs:
+   `cd <ARBISCAN_VPS_APP_DIR> && docker compose pull && docker compose up -d`
+8. If those secrets are missing, image publish still works and deploy is skipped with a visible workflow summary note.
+9. Inspect runtime with `docker compose logs -f arbiscan`.
 
 ## GitHub Registry Deployment
 
@@ -217,6 +223,7 @@ The repository includes a GitHub Actions workflow that:
 
 - builds and tests on pushes and pull requests;
 - publishes a Docker image to `GHCR` on pushes to `main` or `master`;
+- deploys the freshly published image to VPS on pushes to `main` or `master` when VPS secrets are configured;
 - tags images as `<version>`, `latest` and `sha-<commit>`.
 
 Versioning is managed in:

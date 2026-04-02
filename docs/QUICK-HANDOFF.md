@@ -21,22 +21,35 @@ Out of scope by design:
 - Container image target: `ghcr.io/dvpot/arbiscan:latest`
 - Expected VPS app directory: `/opt/ArbiScan`
 - Expected VPS storage root: `/srv/ArbiScan`
+- Review docs: `docs/review/`
 
 Normal release flow:
 
 1. Make code changes in this repo.
 2. Run local verification:
-   `dotnet build ArbiScan.Scanner/ArbiScan.Scanner.csproj`
+   `dotnet build Scanner/ArbiScan.Scanner.csproj`
    `dotnet test`
 3. Commit on `main`.
 4. `git push origin main`
 5. GitHub Actions builds/tests and publishes GHCR image.
-6. On VPS:
-   `cd /opt/ArbiScan`
-   `sudo docker compose pull`
-   `sudo docker compose up -d`
-7. Check runtime:
+6. GitHub Actions deploys to VPS automatically over SSH when these repo secrets are configured:
+   `ARBISCAN_VPS_HOST`
+   `ARBISCAN_VPS_USER`
+   `ARBISCAN_VPS_SSH_KEY`
+   `ARBISCAN_VPS_APP_DIR`
+7. Deploy command executed by CI on VPS:
+   `cd <ARBISCAN_VPS_APP_DIR> && docker compose pull && docker compose up -d`
+8. If secrets are missing, publish still succeeds and deploy is skipped with a workflow summary note.
+9. Check runtime:
    `sudo docker compose logs -f arbiscan`
+
+Manual VPS deploy is now fallback only, not the default flow.
+
+GitHub content hygiene:
+
+- `.env` is ignored; only `.env.example` is tracked.
+- Local runtime bundles under `analysis-bundles/` are ignored.
+- `Scanner/Properties/launchSettings.json` remains tracked intentionally for local `dotnet run` convenience.
 
 ## 3. Runtime Paths On VPS
 
@@ -82,6 +95,8 @@ Implemented:
   `health-cumulative-*.json`
 - Added tests for health report aggregation.
 - Review artifacts (`00-*`, `01-*`, `02-*`) were trimmed and updated to reflect the runtime changes more clearly.
+- Repository structure was simplified:
+  project folders no longer carry the `ArbiScan.` prefix at root level.
 
 ## 5. Current Priorities / Open Questions
 
@@ -124,7 +139,10 @@ If manual collection is needed, send:
 
 When starting a fresh chat, first read:
 
-- `/home/dvpot/projects/github/ArbiScan/QUICK-HANDOFF.md`
+- `/home/dvpot/projects/github/ArbiScan/docs/QUICK-HANDOFF.md`
+- `/home/dvpot/projects/github/ArbiScan/docs/review/00-repo-tree.txt`
+- `/home/dvpot/projects/github/ArbiScan/docs/review/01-critical-files-map.md`
+- `/home/dvpot/projects/github/ArbiScan/docs/review/02-review-delta.md`
 - `/home/dvpot/projects/Tasks/ArbiScan/arbiscan_feedback_codex_ru_2026-04-02.md`
 - `git status --short --branch`
 

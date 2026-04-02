@@ -3,7 +3,7 @@ WORKDIR /src
 
 COPY . .
 RUN dotnet restore ArbiScan.slnx
-RUN dotnet publish ArbiScan.Scanner/ArbiScan.Scanner.csproj -c Release -o /app/publish --no-restore
+RUN dotnet publish Scanner/ArbiScan.Scanner.csproj -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app

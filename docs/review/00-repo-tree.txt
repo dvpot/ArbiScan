@@ -10,7 +10,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   └── workflows
 │       └── build-test-publish.yml
 ├── .gitignore
-├── ArbiScan.Core
+├── Core
 │   ├── ArbiScan.Core.csproj
 │   ├── Configuration
 │   │   └── AppSettings.cs
@@ -62,13 +62,13 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │       ├── QuoteStalenessTracker.cs
 │       ├── SummaryGenerator.cs
 │       └── SymbolRulesNormalizer.cs
-├── ArbiScan.Exchanges.Binance
+├── Exchanges.Binance
 │   ├── ArbiScan.Exchanges.Binance.csproj
 │   └── BinanceSpotExchangeAdapter.cs
-├── ArbiScan.Exchanges.Bybit
+├── Exchanges.Bybit
 │   ├── ArbiScan.Exchanges.Bybit.csproj
 │   └── BybitSpotExchangeAdapter.cs
-├── ArbiScan.Infrastructure
+├── Infrastructure
 │   ├── ArbiScan.Infrastructure.csproj
 │   ├── Logging
 │   │   └── RollingFileLoggerProvider.cs
@@ -80,7 +80,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   └── Setup
 │       ├── AppStoragePaths.cs
 │       └── StoragePathBuilder.cs
-├── ArbiScan.Scanner
+├── Scanner
 │   ├── AppVersion.cs
 │   ├── ArbiScan.Scanner.csproj
 │   ├── Program.cs
@@ -90,7 +90,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   ├── TelegramBotNotifier.cs
 │   ├── appsettings.Development.json
 │   └── appsettings.json
-├── ArbiScan.Tests
+├── Tests
 │   ├── ArbiScan.Tests.csproj
 │   ├── CoreMathTests.cs
 │   ├── HealthReportGeneratorTests.cs
@@ -98,12 +98,17 @@ generated_at_utc: 2026-04-02T09:54:57Z
 ├── ArbiScan.slnx
 ├── Directory.Build.props
 ├── Dockerfile
-├── QUICK-HANDOFF.md
 ├── README.md
 ├── config
 │   ├── appsettings.example.json
 │   └── telegramsettings.example.json
 ├── docker-compose.yml
+├── docs
+│   ├── QUICK-HANDOFF.md
+│   └── review
+│       ├── 00-repo-tree.txt
+│       ├── 01-critical-files-map.md
+│       └── 02-review-delta.md
 └── scripts
     ├── collect-analysis-bundle.sh
     └── get-version.sh

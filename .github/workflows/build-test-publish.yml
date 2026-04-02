@@ -1,4 +1,4 @@
-name: Build, Test, and Publish
+name: Build, Test, Publish, and Deploy
 
 on:
   pull_request:
@@ -86,3 +86,41 @@ jobs:
             APP_VERSION=${{ steps.version.outputs.value }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-vps:
+    needs: build-test-publish
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+
+    steps:
+      - name: Check deploy configuration
+        id: deploy-config
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.ARBISCAN_VPS_HOST }}
+          VPS_USER: ${{ secrets.ARBISCAN_VPS_USER }}
+          VPS_KEY: ${{ secrets.ARBISCAN_VPS_SSH_KEY }}
+          VPS_APP_DIR: ${{ secrets.ARBISCAN_VPS_APP_DIR }}
+        run: |
+          if [[ -n "${VPS_HOST}" && -n "${VPS_USER}" && -n "${VPS_KEY}" && -n "${VPS_APP_DIR}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Auto-deploy skipped because one or more VPS secrets are missing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Deploy latest image on VPS
+        if: steps.deploy-config.outputs.enabled == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ARBISCAN_VPS_HOST }}
+          username: ${{ secrets.ARBISCAN_VPS_USER }}
+          key: ${{ secrets.ARBISCAN_VPS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.ARBISCAN_VPS_APP_DIR }}"
+            docker compose pull
+            docker compose up -d
+            docker compose ps

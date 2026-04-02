@@ -15,9 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArbiScan.Core\ArbiScan.Core.csproj" />
-    <ProjectReference Include="..\ArbiScan.Infrastructure\ArbiScan.Infrastructure.csproj" />
-    <ProjectReference Include="..\ArbiScan.Exchanges.Binance\ArbiScan.Exchanges.Binance.csproj" />
-    <ProjectReference Include="..\ArbiScan.Exchanges.Bybit\ArbiScan.Exchanges.Bybit.csproj" />
+    <ProjectReference Include="..\Core\ArbiScan.Core.csproj" />
+    <ProjectReference Include="..\Infrastructure\ArbiScan.Infrastructure.csproj" />
+    <ProjectReference Include="..\Exchanges.Binance\ArbiScan.Exchanges.Binance.csproj" />
+    <ProjectReference Include="..\Exchanges.Bybit\ArbiScan.Exchanges.Bybit.csproj" />
   </ItemGroup>
 </Project>

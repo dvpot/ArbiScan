@@ -5,6 +5,7 @@
 
 # dotenv files
 .env
+analysis-bundles/
 
 # User-specific files
 *.rsuser

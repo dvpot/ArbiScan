@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\ArbiScan.Core\ArbiScan.Core.csproj" />
+    <ProjectReference Include="..\Core\ArbiScan.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

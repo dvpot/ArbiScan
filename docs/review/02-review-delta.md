@@ -11,11 +11,16 @@ This file establishes the initial external review baseline and records only the 
 
 ## 1. Architecture / structure changes
 
-- No project split/merge or solution restructuring was introduced.
-- Review artifact structure was absent before this snapshot; `00-repo-tree.txt`, `01-critical-files-map.md`, and `02-review-delta.md` were introduced as persistent external review navigation files.
+- Root project directories were renamed from `ArbiScan.*` to shorter operational names:
+  `Core`, `Infrastructure`, `Exchanges.Binance`, `Exchanges.Bybit`, `Scanner`, `Tests`.
+- Review and handoff docs were grouped under `docs/`:
+  `docs/QUICK-HANDOFF.md`
+  `docs/review/00-repo-tree.txt`
+  `docs/review/01-critical-files-map.md`
+  `docs/review/02-review-delta.md`
 - Runtime health flow was split into two explicit components instead of living only inside `ScannerWorker`:
-  `ArbiScan.Core/Services/QuoteStalenessTracker.cs`
-  `ArbiScan.Core/Services/HealthReportGenerator.cs`
+  `Core/Services/QuoteStalenessTracker.cs`
+  `Core/Services/HealthReportGenerator.cs`
 
 ## 2. Domain / strategy / business logic changes
 
@@ -40,6 +45,8 @@ This file establishes the initial external review baseline and records only the 
 - Worker now exports a dedicated health report on the same hourly/daily/cumulative schedule as trading summaries.
 - No new workers, hosted services, schedulers, or restart/recovery loops were added.
 - Main scan cadence, summary timers, and shutdown flush flow remain unchanged.
+- Delivery flow changed from publish-only CI to publish-plus-deploy CI:
+  the GitHub workflow now has a VPS deploy stage over SSH after GHCR publish.
 
 ## 4. Persistence / schema changes
 
@@ -52,8 +59,8 @@ This file establishes the initial external review baseline and records only the 
 
 - No exchange client package swap or new provider was introduced.
 - No REST/websocket subscription shape changed in:
-  `ArbiScan.Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
-  `ArbiScan.Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
+  `Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
+  `Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
 - Exchange adapters now capture timestamp of the last successful order-book update callback for diagnostics.
 - Behavioural integration impact:
   Bybit health degradation should no longer trigger on short normal update gaps alone, and stale alerts now carry enough runtime context for further diagnosis.
@@ -61,9 +68,9 @@ This file establishes the initial external review baseline and records only the 
 ## 6. Tests added / updated
 
 - Added:
-  `ArbiScan.Tests/QuoteStalenessTrackerTests.cs`
+  `Tests/QuoteStalenessTrackerTests.cs`
 - Added:
-  `ArbiScan.Tests/HealthReportGeneratorTests.cs`
+  `Tests/HealthReportGeneratorTests.cs`
 - New regression coverage verifies:
   - stale state requires continuous confirmation time;
   - stale state resets after fresh quote updates;
@@ -80,28 +87,29 @@ This file establishes the initial external review baseline and records only the 
 - Persistence schema remains inline inside repository code; there are no standalone migrations to review for schema evolution.
 - The repository still operates as a single-process, single-symbol scanner. Multi-symbol orchestration, order execution, and richer recovery simulations are still outside current scope.
 - The new diagnostics improve evidence quality, but practical usefulness of collected `window-events` still depends on real runtime outputs and has not been proven by code review alone.
+- Automatic VPS deploy still depends on GitHub repository secrets being configured correctly.
 
 ## Most review-relevant changed files in the current delta
 
-- `ArbiScan.Scanner/ScannerWorker.cs`
+- `Scanner/ScannerWorker.cs`
   runtime diagnostics, telegram debounce, enriched heartbeat, dedicated health report export.
-- `ArbiScan.Core/Services/QuoteStalenessTracker.cs`
+- `Core/Services/QuoteStalenessTracker.cs`
   stateful stale confirmation logic.
-- `ArbiScan.Core/Services/HealthReportGenerator.cs`
+- `Core/Services/HealthReportGenerator.cs`
   dedicated aggregated health report generation.
-- `ArbiScan.Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
+- `Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
   adapter-level last update callback timestamp capture.
-- `ArbiScan.Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
+- `Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
   adapter-level last update callback timestamp capture.
-- `ArbiScan.Core/Configuration/AppSettings.cs`
+- `Core/Configuration/AppSettings.cs`
   new telegram anti-drift/debounce config.
 - `config/telegramsettings.example.json`
   production-facing example for the new Telegram health notification controls.
-- `QUICK-HANDOFF.md`
+- `docs/QUICK-HANDOFF.md`
   operational continuity file for future chats and deployment/runtime context.
 - `scripts/collect-analysis-bundle.sh`
   helper for packaging the runtime artifacts needed for deeper `BybitStale` analysis.
-- `ArbiScan.Tests/QuoteStalenessTrackerTests.cs`
+- `Tests/QuoteStalenessTrackerTests.cs`
   stale-confirmation regression coverage.
-- `ArbiScan.Tests/HealthReportGeneratorTests.cs`
+- `Tests/HealthReportGeneratorTests.cs`
   health report aggregation coverage.

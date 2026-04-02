@@ -1,11 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\ArbiScan.Core\ArbiScan.Core.csproj" />
+    <ProjectReference Include="..\Core\ArbiScan.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Bybit.Net" Version="6.10.0" />
+    <PackageReference Include="Binance.Net" Version="12.11.1" />
   </ItemGroup>
 
   <PropertyGroup>

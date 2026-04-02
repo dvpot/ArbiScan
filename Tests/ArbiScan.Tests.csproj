@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArbiScan.Core\ArbiScan.Core.csproj" />
-    <ProjectReference Include="..\ArbiScan.Infrastructure\ArbiScan.Infrastructure.csproj" />
+    <ProjectReference Include="..\Core\ArbiScan.Core.csproj" />
+    <ProjectReference Include="..\Infrastructure\ArbiScan.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
