@@ -11,10 +11,12 @@ public sealed class SummaryGenerator : ISummaryGenerator
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         IReadOnlyCollection<OpportunityWindowEvent> windows,
-        IReadOnlyCollection<HealthEvent> healthEvents)
+        IReadOnlyCollection<HealthEvent> healthEvents,
+        IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry)
     {
         var orderedWindows = windows.OrderBy(x => x.OpenedAtUtc).ToArray();
         var orderedHealth = healthEvents.OrderBy(x => x.TimestampUtc).ToArray();
+        var debugStats = AggregateDebugStats(evaluationTelemetry);
         var symbol = orderedWindows.FirstOrDefault()?.Symbol ?? "N/A";
         var lifetimes = orderedWindows.Select(x => (double)x.LifetimeMs).OrderBy(x => x).ToArray();
         var netPnls = orderedWindows.Select(x => x.ConservativeNetPnlUsd).OrderBy(x => x).ToArray();
@@ -60,7 +62,8 @@ public sealed class SummaryGenerator : ISummaryGenerator
             orderedHealth.Count(x => x.EventType is HealthEventType.StaleQuotesDetected),
             healthyMs,
             degradedMs,
-            BuildFinalAssessment(orderedWindows));
+            debugStats,
+            BuildFinalAssessment(orderedWindows, debugStats));
     }
 
     private static IReadOnlyDictionary<string, int> BuildLifetimeDistribution(IEnumerable<OpportunityWindowEvent> windows) =>
@@ -145,11 +148,36 @@ public sealed class SummaryGenerator : ISummaryGenerator
             : values[middle];
     }
 
-    private static string BuildFinalAssessment(IReadOnlyCollection<OpportunityWindowEvent> windows)
+    private static SummaryDebugStats AggregateDebugStats(IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry)
+    {
+        if (evaluationTelemetry.Count == 0)
+        {
+            return new SummaryDebugStats(0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        return new SummaryDebugStats(
+            evaluationTelemetry.Sum(x => x.DebugStats.RawPositiveCrossCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToFeesCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToBuffersCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToHealthCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToMinLifetimeCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToFillabilityCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToRulesCount),
+            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToOtherCount));
+    }
+
+    private static string BuildFinalAssessment(IReadOnlyCollection<OpportunityWindowEvent> windows, SummaryDebugStats debugStats)
     {
         if (windows.Count == 0)
         {
-            return "Статистически значимых окон не найдено. Консервативная модель не дает оснований переходить к live testing.";
+            if (debugStats.RawPositiveCrossCount == 0)
+            {
+                return "Статистически значимых окон не найдено. В live-периоде не было даже raw positive cross-spread сигналов, поэтому текущие данные больше похожи на отсутствие рыночных окон, чем на баг детектора.";
+            }
+
+            return $"Статистически значимых окон не найдено. Raw positive cross-spread сигналов: {debugStats.RawPositiveCrossCount}. " +
+                   $"Основные причины отсева: health={debugStats.RejectedDueToHealthCount}, fillability={debugStats.RejectedDueToFillabilityCount}, " +
+                   $"fees={debugStats.RejectedDueToFeesCount}, buffers={debugStats.RejectedDueToBuffersCount}, minLifetime={debugStats.RejectedDueToMinLifetimeCount}, rules={debugStats.RejectedDueToRulesCount}.";
         }
 
         var bestDirection = windows

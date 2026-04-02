@@ -9,5 +9,6 @@ public interface IHealthReportGenerator
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         string symbol,
-        IReadOnlyCollection<HealthEvent> healthEvents);
+        IReadOnlyCollection<HealthEvent> healthEvents,
+        IReadOnlyCollection<StaleDiagnosticEvent> staleDiagnostics);
 }

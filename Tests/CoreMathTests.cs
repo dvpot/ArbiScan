@@ -39,6 +39,10 @@ public sealed class CoreMathTests
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            DateTimeOffset.UtcNow,
+            TimeSpan.Zero,
             [new OrderBookLevel(0.249m, 100m), new OrderBookLevel(0.248m, 100m)],
             [new OrderBookLevel(0.250m, 100m), new OrderBookLevel(0.251m, 100m)]);
 
@@ -79,9 +83,9 @@ public sealed class CoreMathTests
         var duringOpen = tracker.Process("TRXUSDT", open, settings);
         var onClose = tracker.Process("TRXUSDT", close, settings);
 
-        Assert.Empty(duringOpen);
-        Assert.Single(onClose);
-        Assert.True(onClose[0].LifetimeMs >= 800);
+        Assert.Empty(duringOpen.ClosedWindows);
+        Assert.Single(onClose.ClosedWindows);
+        Assert.True(onClose.ClosedWindows[0].LifetimeMs >= 800);
     }
 
     [Fact]
@@ -101,7 +105,13 @@ public sealed class CoreMathTests
             new HealthEvent(fromUtc.AddMinutes(30), HealthEventType.OverallHealthChanged, null, DataHealthFlags.Degraded, false, "Degraded")
         };
 
-        var summary = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, windows, health);
+        var telemetry = new[]
+        {
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(5), new SummaryDebugStats(3, 1, 1, 0, 0, 1, 0, 0)),
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(15), new SummaryDebugStats(2, 0, 0, 1, 1, 0, 1, 0))
+        };
+
+        var summary = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, windows, health, telemetry);
 
         Assert.Equal(2, summary.TotalWindows);
         Assert.Equal(1, summary.FillableCount);
@@ -109,6 +119,8 @@ public sealed class CoreMathTests
         Assert.Equal(0m, Math.Round(summary.TotalNetPnlUsd, 1));
         Assert.True(summary.HealthyDurationMs > 0);
         Assert.True(summary.DegradedDurationMs > 0);
+        Assert.Equal(5, summary.DebugStats.RawPositiveCrossCount);
+        Assert.Equal(1, summary.DebugStats.RejectedDueToMinLifetimeCount);
     }
 
     private static AppSettings CreateSettings(int minWindowLifetimeMs = 1_000) =>
@@ -143,6 +155,10 @@ public sealed class CoreMathTests
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
+            TimeSpan.Zero,
             DateTimeOffset.UtcNow,
             TimeSpan.Zero,
             [new OrderBookLevel(bid, 1_000m), new OrderBookLevel(bid - 0.001m, 1_000m)],

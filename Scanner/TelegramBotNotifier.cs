@@ -37,11 +37,29 @@ public sealed class TelegramBotNotifier : ITelegramNotifier
         }
         catch (ApiRequestException ex)
         {
-            _logger.LogError(ex, "Telegram API error while sending notification");
+            _logger.LogError(
+                ex,
+                "Telegram API error while sending notification. Type={ExceptionType}, Message={Message}, Inner={InnerMessage}, StatusCode={StatusCode}, Endpoint={Endpoint}, Method={Method}, RetryAttempt={RetryAttempt}",
+                ex.GetType().FullName,
+                ex.Message,
+                ex.InnerException?.Message,
+                ex.ErrorCode,
+                "sendMessage",
+                "POST",
+                0);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected Telegram notification error");
+            _logger.LogError(
+                ex,
+                "Unexpected Telegram notification error. Type={ExceptionType}, Message={Message}, Inner={InnerMessage}, StatusCode={StatusCode}, Endpoint={Endpoint}, Method={Method}, RetryAttempt={RetryAttempt}",
+                ex.GetType().FullName,
+                ex.Message,
+                ex.InnerException?.Message,
+                null,
+                "sendMessage",
+                "POST",
+                0);
         }
     }
 }

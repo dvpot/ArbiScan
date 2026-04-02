@@ -8,7 +8,7 @@ public sealed class OpportunityLifetimeTracker
 {
     private readonly Dictionary<string, ActiveOpportunityWindow> _activeWindows = new(StringComparer.Ordinal);
 
-    public IReadOnlyList<OpportunityWindowEvent> Process(
+    public OpportunityLifetimeTrackingResult Process(
         string symbol,
         OpportunityPairEvaluation evaluation,
         AppSettings settings)
@@ -28,7 +28,7 @@ public sealed class OpportunityLifetimeTracker
                     existing.PeakEvaluation = evaluation;
                 }
 
-                return [];
+                return new OpportunityLifetimeTrackingResult([], false);
             }
 
             _activeWindows[key] = new ActiveOpportunityWindow
@@ -42,22 +42,22 @@ public sealed class OpportunityLifetimeTracker
                 PeakEvaluation = evaluation
             };
 
-            return [];
+            return new OpportunityLifetimeTrackingResult([], false);
         }
 
         if (!_activeWindows.Remove(key, out var closed))
         {
-            return [];
+            return new OpportunityLifetimeTrackingResult([], false);
         }
 
         var lifetimeMs = closed.LifetimeMs(evaluation.TimestampUtc);
         if (lifetimeMs < settings.MinWindowLifetimeMs)
         {
-            return [];
+            return new OpportunityLifetimeTrackingResult([], true);
         }
 
         var peak = closed.PeakEvaluation;
-        return
+        return new OpportunityLifetimeTrackingResult(
         [
             new OpportunityWindowEvent(
                 closed.WindowId,
@@ -86,7 +86,8 @@ public sealed class OpportunityLifetimeTracker
                 peak.Conservative.BuffersTotalUsd,
                 peak.HealthFlags,
                 peak.Conservative.RejectReason)
-        ];
+        ],
+        false);
     }
 
     public IReadOnlyList<OpportunityWindowEvent> Flush(string symbol, DateTimeOffset closedAtUtc, AppSettings settings)

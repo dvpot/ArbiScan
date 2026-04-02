@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading;
 using ArbiScan.Core.Configuration;
 using ArbiScan.Core.Enums;
 using ArbiScan.Core.Interfaces;
@@ -33,6 +34,7 @@ public sealed class ScannerWorker : BackgroundService
     private readonly TelegramSettings _telegramSettings;
     private readonly ILogger<ScannerWorker> _logger;
     private readonly QuoteStalenessTracker _quoteStalenessTracker = new();
+    private readonly RuntimeTelemetryBuffer _runtimeTelemetry = new();
 
     private readonly Dictionary<ExchangeId, OrderBookSyncStatus> _previousStatuses = new();
     private readonly Dictionary<ExchangeId, int> _dataAgeBuckets = new();
@@ -103,11 +105,13 @@ public sealed class ScannerWorker : BackgroundService
             while (!stoppingToken.IsCancellationRequested)
             {
                 var nowUtc = DateTimeOffset.UtcNow;
+                var loopStartedAtUtc = nowUtc;
                 var marketSnapshot = BuildMarketSnapshot(nowUtc);
                 _latestMarketSnapshot = marketSnapshot;
 
                 TrackDataAgeDiagnostics(marketSnapshot);
-                await DetectHealthTransitionsAsync(marketSnapshot, stoppingToken);
+                var loopFinishedAtUtc = DateTimeOffset.UtcNow;
+                await DetectHealthTransitionsAsync(marketSnapshot, loopStartedAtUtc, loopFinishedAtUtc, stoppingToken);
 
                 if (nowUtc >= nextSnapshotAtUtc)
                 {
@@ -120,8 +124,13 @@ public sealed class ScannerWorker : BackgroundService
                     foreach (var notional in _settings.TestNotionalsUsd.OrderBy(x => x))
                     {
                         var evaluation = _detector.Evaluate(marketSnapshot, direction, notional, _settings);
-                        var closedWindows = _lifetimeTracker.Process(_settings.Symbol, evaluation, _settings);
-                        foreach (var window in closedWindows)
+                        var trackingResult = _lifetimeTracker.Process(_settings.Symbol, evaluation, _settings);
+                        _runtimeTelemetry.RecordEvaluationTelemetry(
+                            new EvaluationTelemetrySnapshot(
+                                evaluation.TimestampUtc,
+                                BuildEvaluationDebugStats(marketSnapshot, evaluation, trackingResult.RejectedDueToMinLifetime, _settings)));
+
+                        foreach (var window in trackingResult.ClosedWindows)
                         {
                             _closedWindowCount++;
                             await PersistWindowEventAsync(window, stoppingToken);
@@ -251,12 +260,16 @@ public sealed class ScannerWorker : BackgroundService
         return _quoteStalenessTracker.IsStale(
             snapshot.Exchange,
             capturedAtUtc,
-            snapshot.OrderBook.DataAge,
+            snapshot.OrderBook.DataAgeByExchangeTimestamp,
             staleThreshold,
             staleConfirmationWindow);
     }
 
-    private async Task DetectHealthTransitionsAsync(MarketDataSnapshot snapshot, CancellationToken cancellationToken)
+    private async Task DetectHealthTransitionsAsync(
+        MarketDataSnapshot snapshot,
+        DateTimeOffset loopStartedAtUtc,
+        DateTimeOffset loopFinishedAtUtc,
+        CancellationToken cancellationToken)
     {
         await TrackExchangeStatusAsync(snapshot.Binance, cancellationToken);
         await TrackExchangeStatusAsync(snapshot.Bybit, cancellationToken);
@@ -264,20 +277,7 @@ public sealed class ScannerWorker : BackgroundService
         var currentHealthy = snapshot.HealthFlags == DataHealthFlags.None;
         if (snapshot.HealthFlags != _previousHealthFlags)
         {
-            if (snapshot.HealthFlags.HasFlag(DataHealthFlags.BinanceStale) || snapshot.HealthFlags.HasFlag(DataHealthFlags.BybitStale))
-            {
-                LogStaleDiagnostics("entered stale", snapshot);
-                await PersistHealthEventAsync(
-                    new HealthEvent(snapshot.CapturedAtUtc, HealthEventType.StaleQuotesDetected, null, snapshot.HealthFlags, currentHealthy, BuildStaleHealthMessage("detected", snapshot)),
-                    cancellationToken);
-            }
-            else if ((_previousHealthFlags.HasFlag(DataHealthFlags.BinanceStale) || _previousHealthFlags.HasFlag(DataHealthFlags.BybitStale)) && !snapshot.HealthFlags.HasFlag(DataHealthFlags.BinanceStale) && !snapshot.HealthFlags.HasFlag(DataHealthFlags.BybitStale))
-            {
-                LogStaleDiagnostics("recovered from stale", snapshot);
-                await PersistHealthEventAsync(
-                    new HealthEvent(snapshot.CapturedAtUtc, HealthEventType.StaleQuotesRecovered, null, snapshot.HealthFlags, currentHealthy, "Stale quotes recovered"),
-                    cancellationToken);
-            }
+            await HandleStaleTransitionsAsync(snapshot, currentHealthy, loopStartedAtUtc, loopFinishedAtUtc, cancellationToken);
 
             _previousHealthFlags = snapshot.HealthFlags;
         }
@@ -384,8 +384,10 @@ public sealed class ScannerWorker : BackgroundService
     {
         var windows = await _repository.GetWindowEventsAsync(fromUtc, toUtc, cancellationToken);
         var healthEvents = await _repository.GetHealthEventsAsync(fromUtc, toUtc, cancellationToken);
-        var summary = _summaryGenerator.Generate(period, fromUtc, toUtc, windows, healthEvents);
-        var healthReport = _healthReportGenerator.Generate(period, fromUtc, toUtc, _settings.Symbol, healthEvents);
+        var evaluationTelemetry = _runtimeTelemetry.GetEvaluationTelemetry(fromUtc, toUtc);
+        var staleDiagnostics = _runtimeTelemetry.GetStaleDiagnostics(fromUtc, toUtc);
+        var summary = _summaryGenerator.Generate(period, fromUtc, toUtc, windows, healthEvents, evaluationTelemetry);
+        var healthReport = _healthReportGenerator.Generate(period, fromUtc, toUtc, _settings.Symbol, healthEvents, staleDiagnostics);
         await _repository.SaveSummaryAsync(summary, cancellationToken);
         await _exporter.ExportSummaryAsync(summary, cancellationToken);
         await _exporter.ExportHealthReportAsync(healthReport, cancellationToken);
@@ -551,7 +553,7 @@ public sealed class ScannerWorker : BackgroundService
             }
 
             var threshold = _settings.QuoteStalenessThresholdMs;
-            var dataAgeMs = exchangeSnapshot.OrderBook.DataAge.TotalMilliseconds;
+            var dataAgeMs = exchangeSnapshot.OrderBook.DataAgeByExchangeTimestamp.TotalMilliseconds;
             var bucket = dataAgeMs >= threshold ? 3 : dataAgeMs >= 2_000 ? 2 : dataAgeMs >= 1_000 ? 1 : 0;
             _dataAgeBuckets.TryGetValue(exchangeSnapshot.Exchange, out var previousBucket);
 
@@ -631,11 +633,212 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         return $"{exchangeSnapshot.OrderBook.Status}, age={Math.Round(exchangeSnapshot.OrderBook.DataAge.TotalMilliseconds)}ms, " +
+               $"exchangeAge={Math.Round(exchangeSnapshot.OrderBook.DataAgeByExchangeTimestamp.TotalMilliseconds)}ms, " +
+               $"callbackAge={Math.Round(exchangeSnapshot.OrderBook.DataAgeByLocalCallbackTimestamp.TotalMilliseconds)}ms, " +
+               $"topAge={Math.Round(exchangeSnapshot.OrderBook.TimeSinceTopOfBookChanged.TotalMilliseconds)}ms, " +
                $"update={exchangeSnapshot.OrderBook.UpdateTimeUtc:O}, serverUpdate={exchangeSnapshot.OrderBook.UpdateServerTimeUtc:O}, " +
                $"callback={exchangeSnapshot.OrderBook.LastUpdateCallbackUtc:O}, " +
                $"levels={exchangeSnapshot.OrderBook.Bids.Count}/{exchangeSnapshot.OrderBook.Asks.Count}, " +
                $"bid={exchangeSnapshot.OrderBook.BestBid?.Price:0.########}/{exchangeSnapshot.OrderBook.BestBid?.Quantity:0.########}, " +
                $"ask={exchangeSnapshot.OrderBook.BestAsk?.Price:0.########}/{exchangeSnapshot.OrderBook.BestAsk?.Quantity:0.########}";
+    }
+
+    private async Task HandleStaleTransitionsAsync(
+        MarketDataSnapshot snapshot,
+        bool currentHealthy,
+        DateTimeOffset loopStartedAtUtc,
+        DateTimeOffset loopFinishedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        foreach (var exchange in new[] { ExchangeId.Binance, ExchangeId.Bybit })
+        {
+            var previousStale = HasStaleFlag(_previousHealthFlags, exchange);
+            var currentStale = HasStaleFlag(snapshot.HealthFlags, exchange);
+            if (previousStale == currentStale)
+            {
+                continue;
+            }
+
+            var exchangeSnapshot = snapshot.GetExchange(exchange);
+            if (exchangeSnapshot is null)
+            {
+                continue;
+            }
+
+            var eventType = currentStale ? "stale_detected" : "stale_recovered";
+            var diagnosticEvent = BuildStaleDiagnosticEvent(snapshot, exchangeSnapshot, eventType, loopStartedAtUtc, loopFinishedAtUtc);
+            _runtimeTelemetry.RecordStaleDiagnostic(diagnosticEvent);
+            await _exporter.ExportStaleDiagnosticAsync(diagnosticEvent, cancellationToken);
+
+            LogStaleDiagnostics(currentStale ? "entered stale" : "recovered from stale", snapshot);
+            await PersistHealthEventAsync(
+                new HealthEvent(
+                    snapshot.CapturedAtUtc,
+                    currentStale ? HealthEventType.StaleQuotesDetected : HealthEventType.StaleQuotesRecovered,
+                    exchange,
+                    BuildExchangeSpecificStaleFlags(exchange, snapshot.HealthFlags, currentStale),
+                    currentHealthy,
+                    currentStale ? BuildStaleHealthMessage("detected", snapshot) : $"Stale quotes recovered: {exchange}. {DescribeExchange(exchangeSnapshot)}"),
+                cancellationToken);
+        }
+    }
+
+    private SummaryDebugStats BuildEvaluationDebugStats(
+        MarketDataSnapshot snapshot,
+        OpportunityPairEvaluation evaluation,
+        bool rejectedDueToMinLifetime,
+        AppSettings settings)
+    {
+        var rawPositiveCross = HasRawPositiveCross(snapshot, evaluation.Direction);
+        if (!rawPositiveCross)
+        {
+            return new SummaryDebugStats(0, 0, 0, 0, rejectedDueToMinLifetime ? 1 : 0, 0, 0, 0);
+        }
+
+        var conservative = evaluation.Conservative;
+        var profitable = conservative.IsProfitable(
+            settings.Thresholds.EntryThresholdUsd,
+            settings.Thresholds.EntryThresholdBps);
+        var rejectedDueToHealth = !profitable && conservative.HealthFlags != DataHealthFlags.None;
+        var rejectedDueToRules = !profitable && string.Equals(conservative.RejectReason, "Symbol minimums not met", StringComparison.Ordinal);
+        var rejectedDueToFillability = !profitable && !rejectedDueToHealth && !rejectedDueToRules &&
+                                       (conservative.FillabilityStatus != FillabilityStatus.Fillable ||
+                                        conservative.RejectReason is "Executable quantity rounded to zero" or "Insufficient depth for executable quantity" or "Missing market snapshot");
+        var rejectedDueToFees = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability &&
+                                conservative.GrossPnlUsd > 0m &&
+                                conservative.GrossPnlUsd - conservative.FeesTotalUsd <= 0m;
+        var rejectedDueToBuffers = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability &&
+                                   conservative.GrossPnlUsd - conservative.FeesTotalUsd > 0m &&
+                                   conservative.NetPnlUsd <= 0m;
+        var rejectedDueToOther = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability && !rejectedDueToFees && !rejectedDueToBuffers;
+
+        return new SummaryDebugStats(
+            1,
+            rejectedDueToFees ? 1 : 0,
+            rejectedDueToBuffers ? 1 : 0,
+            rejectedDueToHealth ? 1 : 0,
+            rejectedDueToMinLifetime ? 1 : 0,
+            rejectedDueToFillability ? 1 : 0,
+            rejectedDueToRules ? 1 : 0,
+            rejectedDueToOther ? 1 : 0);
+    }
+
+    private bool HasRawPositiveCross(MarketDataSnapshot snapshot, ArbitrageDirection direction)
+    {
+        var buySnapshot = snapshot.GetExchange(direction.BuyExchange());
+        var sellSnapshot = snapshot.GetExchange(direction.SellExchange());
+        var buyAsk = buySnapshot?.OrderBook.BestAsk?.Price;
+        var sellBid = sellSnapshot?.OrderBook.BestBid?.Price;
+        return buyAsk.HasValue && sellBid.HasValue && sellBid.Value > buyAsk.Value;
+    }
+
+    private StaleDiagnosticEvent BuildStaleDiagnosticEvent(
+        MarketDataSnapshot snapshot,
+        ExchangeMarketSnapshot exchangeSnapshot,
+        string eventType,
+        DateTimeOffset loopStartedAtUtc,
+        DateTimeOffset loopFinishedAtUtc)
+    {
+        var degradedFlags = ExpandFlags(snapshot.HealthFlags).ToArray();
+
+        return new StaleDiagnosticEvent(
+            snapshot.CapturedAtUtc,
+            exchangeSnapshot.Exchange,
+            eventType,
+            snapshot.Symbol,
+            _settings.QuoteStalenessThresholdMs,
+            _settings.QuoteStalenessConfirmationMs,
+            _settings.ScanIntervalMs,
+            exchangeSnapshot.OrderBook.Status,
+            snapshot.CapturedAtUtc,
+            exchangeSnapshot.OrderBook.UpdateTimeUtc,
+            exchangeSnapshot.OrderBook.UpdateServerTimeUtc,
+            exchangeSnapshot.OrderBook.LastUpdateCallbackUtc,
+            exchangeSnapshot.OrderBook.DataAge.TotalMilliseconds,
+            exchangeSnapshot.OrderBook.DataAgeByExchangeTimestamp.TotalMilliseconds,
+            exchangeSnapshot.OrderBook.DataAgeByLocalCallbackTimestamp.TotalMilliseconds,
+            exchangeSnapshot.OrderBook.DataAgeByLocalCallbackTimestamp.TotalMilliseconds,
+            exchangeSnapshot.OrderBook.TimeSinceTopOfBookChanged.TotalMilliseconds,
+            exchangeSnapshot.OrderBook.BestBid?.Price,
+            exchangeSnapshot.OrderBook.BestAsk?.Price,
+            exchangeSnapshot.OrderBook.Bids.Count,
+            exchangeSnapshot.OrderBook.Asks.Count,
+            exchangeSnapshot.OrderBook.BestBid?.Quantity,
+            exchangeSnapshot.OrderBook.BestAsk?.Quantity,
+            loopStartedAtUtc,
+            loopFinishedAtUtc,
+            (loopFinishedAtUtc - loopStartedAtUtc).TotalMilliseconds,
+            Environment.CurrentManagedThreadId,
+            snapshot.HealthFlags == DataHealthFlags.None,
+            degradedFlags,
+            DetermineStaleLikelyRootCause(exchangeSnapshot));
+    }
+
+    private static bool HasStaleFlag(DataHealthFlags flags, ExchangeId exchange) =>
+        exchange switch
+        {
+            ExchangeId.Binance => flags.HasFlag(DataHealthFlags.BinanceStale),
+            ExchangeId.Bybit => flags.HasFlag(DataHealthFlags.BybitStale),
+            _ => false
+        };
+
+    private static DataHealthFlags BuildExchangeSpecificStaleFlags(ExchangeId exchange, DataHealthFlags snapshotFlags, bool currentStale)
+    {
+        var exchangeFlag = exchange switch
+        {
+            ExchangeId.Binance => DataHealthFlags.BinanceStale,
+            ExchangeId.Bybit => DataHealthFlags.BybitStale,
+            _ => DataHealthFlags.None
+        };
+
+        var baseFlags = snapshotFlags & ~(DataHealthFlags.BinanceStale | DataHealthFlags.BybitStale);
+        if (!currentStale)
+        {
+            return baseFlags;
+        }
+
+        return baseFlags | exchangeFlag | DataHealthFlags.Degraded;
+    }
+
+    private static IEnumerable<string> ExpandFlags(DataHealthFlags flags)
+    {
+        foreach (var value in Enum.GetValues<DataHealthFlags>())
+        {
+            if (value == DataHealthFlags.None)
+            {
+                continue;
+            }
+
+            if (flags.HasFlag(value))
+            {
+                yield return value.ToString();
+            }
+        }
+    }
+
+    private string DetermineStaleLikelyRootCause(ExchangeMarketSnapshot exchangeSnapshot)
+    {
+        var callbackSilenceMs = exchangeSnapshot.OrderBook.DataAgeByLocalCallbackTimestamp.TotalMilliseconds;
+        var exchangeAgeMs = exchangeSnapshot.OrderBook.DataAgeByExchangeTimestamp.TotalMilliseconds;
+        var topChangeAgeMs = exchangeSnapshot.OrderBook.TimeSinceTopOfBookChanged.TotalMilliseconds;
+        var thresholdMs = _settings.QuoteStalenessThresholdMs;
+
+        if (callbackSilenceMs >= thresholdMs && callbackSilenceMs >= exchangeAgeMs * 1.25d)
+        {
+            return "callback_gap";
+        }
+
+        if (exchangeAgeMs >= thresholdMs && callbackSilenceMs < thresholdMs)
+        {
+            return "exchange_timestamp_gap";
+        }
+
+        if (topChangeAgeMs >= thresholdMs && callbackSilenceMs < thresholdMs * 1.25d)
+        {
+            return "top_of_book_unchanged";
+        }
+
+        return "unknown";
     }
 
     private static string Shorten(string value, int maxLength) =>

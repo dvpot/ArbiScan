@@ -10,6 +10,10 @@ public sealed record OrderBookSnapshot(
     DateTimeOffset? UpdateServerTimeUtc,
     DateTimeOffset? LastUpdateCallbackUtc,
     TimeSpan DataAge,
+    TimeSpan DataAgeByExchangeTimestamp,
+    TimeSpan DataAgeByLocalCallbackTimestamp,
+    DateTimeOffset? LastTopOfBookChangeUtc,
+    TimeSpan TimeSinceTopOfBookChanged,
     IReadOnlyList<OrderBookLevel> Bids,
     IReadOnlyList<OrderBookLevel> Asks)
 {

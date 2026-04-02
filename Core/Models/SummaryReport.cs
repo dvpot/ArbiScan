@@ -37,4 +37,5 @@ public sealed record SummaryReport(
     int StaleIntervalCount,
     long HealthyDurationMs,
     long DegradedDurationMs,
+    SummaryDebugStats DebugStats,
     string FinalAssessment);

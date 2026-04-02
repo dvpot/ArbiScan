@@ -25,6 +25,9 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
     private BinanceSocketClient? _socketClient;
     private BinanceSpotSymbolOrderBook? _orderBook;
     private DateTimeOffset? _lastUpdateCallbackUtc;
+    private DateTimeOffset? _lastTopOfBookChangeUtc;
+    private OrderBookLevel? _lastTopBid;
+    private OrderBookLevel? _lastTopAsk;
 
     public BinanceSpotExchangeAdapter(
         string symbol,
@@ -88,7 +91,7 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
             _loggerFactory,
             _restClient,
             _socketClient);
-        _orderBook.OnOrderBookUpdate += _ => _lastUpdateCallbackUtc = DateTimeOffset.UtcNow;
+        _orderBook.OnOrderBookUpdate += _ => HandleOrderBookUpdate();
 
         _logger.LogInformation("Binance adapter initialized for {Symbol}", _symbol);
     }
@@ -121,7 +124,9 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
         }
 
         var capturedAtUtc = DateTimeOffset.UtcNow;
-        var dataAge = CalculateDataAge(capturedAtUtc, _orderBook.UpdateTime, _orderBook.UpdateServerTime, _orderBook.DataAge);
+        var dataAgeByExchangeTimestamp = CalculateDataAge(capturedAtUtc, _orderBook.UpdateTime, _orderBook.UpdateServerTime, _orderBook.DataAge);
+        var dataAgeByLocalCallbackTimestamp = CalculateCallbackAge(capturedAtUtc, _lastUpdateCallbackUtc);
+        var timeSinceTopOfBookChanged = CalculateCallbackAge(capturedAtUtc, _lastTopOfBookChangeUtc);
 
         return new ExchangeMarketSnapshot(
             ExchangeId.Binance,
@@ -133,7 +138,11 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
                 _orderBook.UpdateTime,
                 _orderBook.UpdateServerTime,
                 _lastUpdateCallbackUtc,
-                dataAge,
+                dataAgeByExchangeTimestamp,
+                dataAgeByExchangeTimestamp,
+                dataAgeByLocalCallbackTimestamp,
+                _lastTopOfBookChangeUtc,
+                timeSinceTopOfBookChanged,
                 _orderBook.Bids.Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray(),
                 _orderBook.Asks.Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray()));
     }
@@ -190,5 +199,37 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
         }
 
         return fallbackDataAge ?? TimeSpan.MaxValue;
+    }
+
+    private void HandleOrderBookUpdate()
+    {
+        _lastUpdateCallbackUtc = DateTimeOffset.UtcNow;
+
+        if (_orderBook is null)
+        {
+            return;
+        }
+
+        var currentTopBid = _orderBook.Bids.FirstOrDefault();
+        var currentTopAsk = _orderBook.Asks.FirstOrDefault();
+        var mappedTopBid = currentTopBid is null ? null : new OrderBookLevel(currentTopBid.Price, currentTopBid.Quantity);
+        var mappedTopAsk = currentTopAsk is null ? null : new OrderBookLevel(currentTopAsk.Price, currentTopAsk.Quantity);
+        if (!Equals(_lastTopBid, mappedTopBid) || !Equals(_lastTopAsk, mappedTopAsk))
+        {
+            _lastTopBid = mappedTopBid;
+            _lastTopAsk = mappedTopAsk;
+            _lastTopOfBookChangeUtc = _lastUpdateCallbackUtc;
+        }
+    }
+
+    private static TimeSpan CalculateCallbackAge(DateTimeOffset capturedAtUtc, DateTimeOffset? timestampUtc)
+    {
+        if (!timestampUtc.HasValue)
+        {
+            return TimeSpan.MaxValue;
+        }
+
+        var age = capturedAtUtc - timestampUtc.Value;
+        return age < TimeSpan.Zero ? TimeSpan.Zero : age;
     }
 }

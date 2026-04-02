@@ -13,9 +13,14 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         string symbol,
-        IReadOnlyCollection<HealthEvent> healthEvents)
+        IReadOnlyCollection<HealthEvent> healthEvents,
+        IReadOnlyCollection<StaleDiagnosticEvent> staleDiagnostics)
     {
         var orderedHealth = healthEvents.OrderBy(x => x.TimestampUtc).ToArray();
+        var diagnosticsByExchange = staleDiagnostics
+            .OrderBy(x => x.TimestampUtc)
+            .GroupBy(x => x.Exchange)
+            .ToDictionary(x => x.Key, x => x.ToArray());
         var healthyDurationMs = CalculateDuration(orderedHealth, fromUtc, toUtc, healthy: true);
         var degradedDurationMs = Math.Max(0, (long)(toUtc - fromUtc).TotalMilliseconds - healthyDurationMs);
 
@@ -31,6 +36,24 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
             x => x.ToString(),
             x => orderedHealth.Count(e => e.EventType == HealthEventType.StaleQuotesDetected && HasStaleFlag(e.Flags, x)));
 
+        var staleDetectedCountByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => GetDiagnosticsForExchange(diagnosticsByExchange, x).Count(e => e.EventType == "stale_detected"));
+
+        var staleRecoveredCountByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => GetDiagnosticsForExchange(diagnosticsByExchange, x).Count(e => e.EventType == "stale_recovered"));
+
+        var staleIntervalsByExchange = Exchanges.ToDictionary(
+            x => x,
+            x => BuildStaleIntervals(GetDiagnosticsForExchange(diagnosticsByExchange, x)));
+
+        var staleFlapCountByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => staleIntervalsByExchange[x].Count(interval => interval <= Math.Max(
+                GetDiagnosticsForExchange(diagnosticsByExchange, x).FirstOrDefault()?.QuoteStalenessConfirmationMs * 2d ?? 0d,
+                GetDiagnosticsForExchange(diagnosticsByExchange, x).FirstOrDefault()?.ScanIntervalMs * 3d ?? 0d)));
+
         var topDegradationCauses = orderedHealth
             .Where(x => !x.IsHealthyAfterEvent && x.Flags != DataHealthFlags.None)
             .SelectMany(x => ExpandFlags(x.Flags))
@@ -40,7 +63,51 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
 
         var longestStaleIntervalMsByExchange = Exchanges.ToDictionary(
             x => x.ToString(),
-            x => CalculateLongestStaleIntervalMs(orderedHealth, fromUtc, toUtc, x));
+            x => staleIntervalsByExchange[x].Count == 0 ? 0L : (long)staleIntervalsByExchange[x].Max());
+
+        var averageStaleDurationMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Average(staleIntervalsByExchange[x]));
+
+        var medianStaleDurationMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Percentile(staleIntervalsByExchange[x], 50));
+
+        var maxStaleDurationMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => staleIntervalsByExchange[x].Count == 0 ? 0d : staleIntervalsByExchange[x].Max());
+
+        var p95StaleDurationMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Percentile(staleIntervalsByExchange[x], 95));
+
+        var averageDataAgeMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Average(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.DataAgeMs)));
+
+        var p95DataAgeMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Percentile(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.DataAgeMs), 95));
+
+        var maxDataAgeMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => MaxOrDefault(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.DataAgeMs)));
+
+        var averageCallbackSilenceMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Average(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.CallbackSilenceMs)));
+
+        var p95CallbackSilenceMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => Percentile(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.CallbackSilenceMs), 95));
+
+        var maxCallbackSilenceMsByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => MaxOrDefault(GetDiagnosticsForExchange(diagnosticsByExchange, x).Select(e => e.CallbackSilenceMs)));
+
+        var staleLikelyRootCauseByExchange = Exchanges.ToDictionary(
+            x => x.ToString(),
+            x => DetermineDominantRootCause(GetDiagnosticsForExchange(diagnosticsByExchange, x)));
 
         var lastStaleDetectedAtUtcByExchange = Exchanges.ToDictionary(
             x => x.ToString(),
@@ -74,8 +141,22 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
             reconnectCountByExchange,
             resyncCountByExchange,
             staleCountByExchange,
+            staleDetectedCountByExchange,
+            staleRecoveredCountByExchange,
+            staleFlapCountByExchange,
             topDegradationCauses,
             longestStaleIntervalMsByExchange,
+            averageStaleDurationMsByExchange,
+            medianStaleDurationMsByExchange,
+            maxStaleDurationMsByExchange,
+            p95StaleDurationMsByExchange,
+            averageDataAgeMsByExchange,
+            p95DataAgeMsByExchange,
+            maxDataAgeMsByExchange,
+            averageCallbackSilenceMsByExchange,
+            p95CallbackSilenceMsByExchange,
+            maxCallbackSilenceMsByExchange,
+            staleLikelyRootCauseByExchange,
             lastStaleDetectedAtUtcByExchange,
             lastReconnectAtUtcByExchange,
             lastResyncAtUtcByExchange);
@@ -115,43 +196,32 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
         return totalMs;
     }
 
-    private static long CalculateLongestStaleIntervalMs(
-        IReadOnlyList<HealthEvent> healthEvents,
-        DateTimeOffset fromUtc,
-        DateTimeOffset toUtc,
-        ExchangeId exchange)
+    private static IReadOnlyList<double> BuildStaleIntervals(IReadOnlyList<StaleDiagnosticEvent> diagnostics)
     {
         DateTimeOffset? startedAtUtc = null;
-        var longestMs = 0L;
+        var intervals = new List<double>();
 
-        foreach (var healthEvent in healthEvents)
+        foreach (var diagnostic in diagnostics)
         {
-            if (healthEvent.TimestampUtc < fromUtc || healthEvent.TimestampUtc > toUtc)
+            if (diagnostic.EventType == "stale_detected")
             {
+                startedAtUtc ??= diagnostic.TimestampUtc;
                 continue;
             }
 
-            if (healthEvent.EventType == HealthEventType.StaleQuotesDetected && HasStaleFlag(healthEvent.Flags, exchange))
+            if (startedAtUtc.HasValue && diagnostic.EventType == "stale_recovered")
             {
-                startedAtUtc ??= healthEvent.TimestampUtc;
-                continue;
-            }
-
-            if (startedAtUtc.HasValue &&
-                (healthEvent.EventType == HealthEventType.StaleQuotesRecovered ||
-                 (healthEvent.EventType == HealthEventType.OverallHealthChanged && !HasStaleFlag(healthEvent.Flags, exchange))))
-            {
-                longestMs = Math.Max(longestMs, (long)(healthEvent.TimestampUtc - startedAtUtc.Value).TotalMilliseconds);
+                intervals.Add((diagnostic.TimestampUtc - startedAtUtc.Value).TotalMilliseconds);
                 startedAtUtc = null;
             }
         }
 
         if (startedAtUtc.HasValue)
         {
-            longestMs = Math.Max(longestMs, (long)(toUtc - startedAtUtc.Value).TotalMilliseconds);
+            intervals.Add((diagnostics.Last().TimestampUtc - startedAtUtc.Value).TotalMilliseconds);
         }
 
-        return longestMs;
+        return intervals;
     }
 
     private static bool HasStaleFlag(DataHealthFlags flags, ExchangeId exchange) =>
@@ -176,5 +246,61 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
                 yield return value.ToString();
             }
         }
+    }
+
+    private static IReadOnlyList<StaleDiagnosticEvent> GetDiagnosticsForExchange(
+        IReadOnlyDictionary<ExchangeId, StaleDiagnosticEvent[]> diagnosticsByExchange,
+        ExchangeId exchange) =>
+        diagnosticsByExchange.TryGetValue(exchange, out var diagnostics)
+            ? diagnostics
+            : [];
+
+    private static double Average(IEnumerable<double> values)
+    {
+        var array = values as double[] ?? values.ToArray();
+        return array.Length == 0 ? 0d : array.Average();
+    }
+
+    private static double MaxOrDefault(IEnumerable<double> values)
+    {
+        var array = values as double[] ?? values.ToArray();
+        return array.Length == 0 ? 0d : array.Max();
+    }
+
+    private static double Percentile(IEnumerable<double> values, int percentile)
+    {
+        var ordered = values.OrderBy(x => x).ToArray();
+        if (ordered.Length == 0)
+        {
+            return 0d;
+        }
+
+        if (ordered.Length == 1)
+        {
+            return ordered[0];
+        }
+
+        var index = (percentile / 100d) * (ordered.Length - 1);
+        var lower = (int)Math.Floor(index);
+        var upper = (int)Math.Ceiling(index);
+        if (lower == upper)
+        {
+            return ordered[lower];
+        }
+
+        var fraction = index - lower;
+        return ordered[lower] + ((ordered[upper] - ordered[lower]) * fraction);
+    }
+
+    private static string DetermineDominantRootCause(IReadOnlyList<StaleDiagnosticEvent> diagnostics)
+    {
+        var dominant = diagnostics
+            .Where(x => x.EventType == "stale_detected")
+            .GroupBy(x => x.StaleLikelyRootCause)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .FirstOrDefault();
+
+        return string.IsNullOrWhiteSpace(dominant) ? "unknown" : dominant;
     }
 }
