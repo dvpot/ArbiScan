@@ -121,6 +121,10 @@ jobs:
           script: |
             set -euo pipefail
             cd "${{ secrets.ARBISCAN_VPS_APP_DIR }}"
+            existing_container_id="$(docker ps -aq -f name=^arbiscan$ || true)"
+            if [[ -n "${existing_container_id}" ]]; then
+              docker rm -f arbiscan || true
+            fi
             docker compose pull
             docker compose up -d
             docker compose ps
