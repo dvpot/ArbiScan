@@ -1,43 +1,43 @@
 repo: ArbiScan
 branch: main
-latest_commit_sha: 9e2efd5353fff5c10bb665e3d1000e7306410967
+latest_commit_sha: cf035ecb1fccf9021af41ce25144289f0f254e71
 generated_at_utc: 2026-04-02T09:54:57Z
 
 # 02 Review Delta
 
 Previous external review snapshot: not present in repository history.
 
-This file establishes the initial external review baseline and records the review-relevant changes that led to the current state. The concrete delta below is based on the recent commits `1f0312dca175b4df475dc71e4bc9b24b7c7c13fd` and `9e2efd5353fff5c10bb665e3d1000e7306410967`.
+This file establishes the initial external review baseline and records only the most review-relevant recent runtime changes.
 
 ## 1. Architecture / structure changes
 
 - No project split/merge or solution restructuring was introduced.
-- Review artifact structure was absent before this snapshot; `00-repo-tree.txt`, `01-critical-files-map.md`, and `02-review-delta.md` are now added as persistent external review navigation files.
-- Runtime health flow gained a dedicated stateful component:
+- Review artifact structure was absent before this snapshot; `00-repo-tree.txt`, `01-critical-files-map.md`, and `02-review-delta.md` were introduced as persistent external review navigation files.
+- Runtime health flow was split into two explicit components instead of living only inside `ScannerWorker`:
   `ArbiScan.Core/Services/QuoteStalenessTracker.cs`
-  This is a structural extraction from inline health-threshold logic into an explicit service-level tracker.
+  `ArbiScan.Core/Services/HealthReportGenerator.cs`
 
 ## 2. Domain / strategy / business logic changes
 
 - Behavioural change:
   stale quote detection no longer flips immediately when `DataAge > QuoteStalenessThresholdMs`.
 - New logic now requires the stale condition to remain true continuously for a confirmation window before setting `BybitStale` / `BinanceStale`.
-- Added new config parameter:
+- Added config parameter:
   `QuoteStalenessConfirmationMs`
-  in:
-  `ArbiScan.Core/Configuration/AppSettings.cs`
-- `ArbiScan.Scanner/ScannerWorker.cs` now calls `QuoteStalenessTracker` during market snapshot health evaluation.
-- Earlier config-only change from commit `1f0312d` raised:
-  `QuoteStalenessThresholdMs`
-  from previous value to `3000` in runtime and example config files.
-- Net effect of recent changes:
-  the threshold increase alone was insufficient for Bybit.
-  The confirmation-window logic is the meaningful correctness change.
+- Added richer health-notification config:
+  `HealthStateChangeMinNotifyIntervalSeconds`
+  `RequireStableHealthyBeforeNotifyMs`
+  `RequireStableDegradedBeforeNotifyMs`
+- `ScannerWorker` now logs stale diagnostics with status, update timestamps, callback timestamp, depth counts, best bid/ask, and threshold-crossing warnings at `>1000ms`, `>2000ms`, and `>threshold`.
+- Net effect:
+  the threshold increase alone was insufficient for Bybit; confirmation-window plus diagnostics is now the review-relevant correctness change.
 
 ## 3. Execution lifecycle / workers / orchestration changes
 
 - `ScannerWorker` health evaluation path changed:
-  stale detection is now stateful across loop iterations instead of stateless per snapshot.
+  stale detection is stateful across loop iterations instead of stateless per snapshot.
+- Telegram health-state notifications now have debounce/cooldown behavior independent of health-event persistence.
+- Worker now exports a dedicated health report on the same hourly/daily/cumulative schedule as trading summaries.
 - No new workers, hosted services, schedulers, or restart/recovery loops were added.
 - Main scan cadence, summary timers, and shutdown flush flow remain unchanged.
 
@@ -45,7 +45,8 @@ This file establishes the initial external review baseline and records the revie
 
 - No SQLite schema changes were introduced.
 - No new tables, columns, migrations, or repository contracts were added.
-- The new stale-confirmation behavior affects persisted health event frequency and semantics, but not storage shape.
+- Stale-confirmation behavior and Telegram debounce affect health-event frequency/interpretation, but not storage shape.
+- New `health-<period>-<timestamp>.json` files are exported to reports storage; they are standalone report artifacts, not DB-backed entities.
 
 ## 5. External integrations / exchange / API changes
 
@@ -53,20 +54,24 @@ This file establishes the initial external review baseline and records the revie
 - No REST/websocket subscription shape changed in:
   `ArbiScan.Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
   `ArbiScan.Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
+- Exchange adapters now capture timestamp of the last successful order-book update callback for diagnostics.
 - Behavioural integration impact:
-  Bybit health degradation should no longer trigger on short normal update gaps alone; this changes externally observed Telegram and health-event output.
+  Bybit health degradation should no longer trigger on short normal update gaps alone, and stale alerts now carry enough runtime context for further diagnosis.
 
 ## 6. Tests added / updated
 
 - Added:
   `ArbiScan.Tests/QuoteStalenessTrackerTests.cs`
+- Added:
+  `ArbiScan.Tests/HealthReportGeneratorTests.cs`
 - New regression coverage verifies:
   - stale state requires continuous confirmation time;
   - stale state resets after fresh quote updates;
   - explicit tracker reset clears exchange-local stale history.
-- Existing broad math/summary tests in:
-  `ArbiScan.Tests/CoreMathTests.cs`
-  were not structurally expanded in this delta.
+- New health-report coverage verifies:
+  - per-exchange reconnect/resync/stale counting;
+  - longest stale interval calculation;
+  - last stale/reconnect/resync timestamps.
 
 ## 7. Known remaining gaps
 
@@ -74,39 +79,29 @@ This file establishes the initial external review baseline and records the revie
 - There is still no dedicated integration-test suite for live exchange adapter behavior or websocket gap simulation.
 - Persistence schema remains inline inside repository code; there are no standalone migrations to review for schema evolution.
 - The repository still operates as a single-process, single-symbol scanner. Multi-symbol orchestration, order execution, and richer recovery simulations are still outside current scope.
+- The new diagnostics improve evidence quality, but practical usefulness of collected `window-events` still depends on real runtime outputs and has not been proven by code review alone.
 
-## Added / modified / deleted files in the current review-relevant delta
+## Most review-relevant changed files in the current delta
 
-### Commit `1f0312dca175b4df475dc71e4bc9b24b7c7c13fd`
-
-- Modified:
-  `ArbiScan.Scanner/appsettings.json`
-- Modified:
-  `config/appsettings.example.json`
-- Deleted:
-  none
-- Added:
-  none
-- Purpose:
-  attempted to reduce false stale detections by increasing the quote staleness threshold to `3000 ms`.
-
-### Commit `9e2efd5353fff5c10bb665e3d1000e7306410967`
-
-- Added:
-  `ArbiScan.Core/Services/QuoteStalenessTracker.cs`
-- Added:
-  `ArbiScan.Tests/QuoteStalenessTrackerTests.cs`
-- Modified:
-  `ArbiScan.Core/Configuration/AppSettings.cs`
-- Modified:
-  `ArbiScan.Scanner/ScannerWorker.cs`
-- Modified:
-  `ArbiScan.Scanner/appsettings.json`
-- Modified:
-  `ArbiScan.Scanner/appsettings.Development.json`
-- Modified:
-  `config/appsettings.example.json`
-- Deleted:
-  none
-- Purpose:
-  fix false Bybit stale alerts by introducing a confirmation window before the worker marks quotes stale.
+- `ArbiScan.Scanner/ScannerWorker.cs`
+  runtime diagnostics, telegram debounce, enriched heartbeat, dedicated health report export.
+- `ArbiScan.Core/Services/QuoteStalenessTracker.cs`
+  stateful stale confirmation logic.
+- `ArbiScan.Core/Services/HealthReportGenerator.cs`
+  dedicated aggregated health report generation.
+- `ArbiScan.Exchanges.Binance/BinanceSpotExchangeAdapter.cs`
+  adapter-level last update callback timestamp capture.
+- `ArbiScan.Exchanges.Bybit/BybitSpotExchangeAdapter.cs`
+  adapter-level last update callback timestamp capture.
+- `ArbiScan.Core/Configuration/AppSettings.cs`
+  new telegram anti-drift/debounce config.
+- `config/telegramsettings.example.json`
+  production-facing example for the new Telegram health notification controls.
+- `QUICK-HANDOFF.md`
+  operational continuity file for future chats and deployment/runtime context.
+- `scripts/collect-analysis-bundle.sh`
+  helper for packaging the runtime artifacts needed for deeper `BybitStale` analysis.
+- `ArbiScan.Tests/QuoteStalenessTrackerTests.cs`
+  stale-confirmation regression coverage.
+- `ArbiScan.Tests/HealthReportGeneratorTests.cs`
+  health report aggregation coverage.

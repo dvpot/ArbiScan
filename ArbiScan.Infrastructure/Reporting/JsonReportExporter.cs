@@ -26,6 +26,20 @@ public sealed class JsonReportExporter : IReportExporter
     public Task ExportHealthEventAsync(HealthEvent healthEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"health-events-{healthEvent.TimestampUtc:yyyyMMdd}.jsonl"), healthEvent, cancellationToken);
 
+    public async Task ExportHealthReportAsync(HealthReport report, CancellationToken cancellationToken)
+    {
+        var periodFile = Path.Combine(_reportsPath, $"health-{report.Period.ToString().ToLowerInvariant()}-{report.GeneratedAtUtc:yyyyMMddHHmmss}.json");
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await File.WriteAllTextAsync(periodFile, JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Task ExportWindowEventAsync(OpportunityWindowEvent windowEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"window-events-{windowEvent.OpenedAtUtc:yyyyMMdd}.jsonl"), windowEvent, cancellationToken);
 

@@ -24,6 +24,7 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
     private BinanceRestClient? _restClient;
     private BinanceSocketClient? _socketClient;
     private BinanceSpotSymbolOrderBook? _orderBook;
+    private DateTimeOffset? _lastUpdateCallbackUtc;
 
     public BinanceSpotExchangeAdapter(
         string symbol,
@@ -87,6 +88,7 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
             _loggerFactory,
             _restClient,
             _socketClient);
+        _orderBook.OnOrderBookUpdate += _ => _lastUpdateCallbackUtc = DateTimeOffset.UtcNow;
 
         _logger.LogInformation("Binance adapter initialized for {Symbol}", _symbol);
     }
@@ -130,6 +132,7 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
                 capturedAtUtc,
                 _orderBook.UpdateTime,
                 _orderBook.UpdateServerTime,
+                _lastUpdateCallbackUtc,
                 dataAge,
                 _orderBook.Bids.Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray(),
                 _orderBook.Asks.Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray()));

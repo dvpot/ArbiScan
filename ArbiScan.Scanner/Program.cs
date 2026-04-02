@@ -42,6 +42,7 @@ builder.Services.AddSingleton<IFeeCalculator>(_ => new FeeCalculator(settings.Bi
 builder.Services.AddSingleton<IFillableSizeCalculator, FillableSizeCalculator>();
 builder.Services.AddSingleton<IOpportunityDetector, OpportunityDetector>();
 builder.Services.AddSingleton<ISummaryGenerator, SummaryGenerator>();
+builder.Services.AddSingleton<IHealthReportGenerator, HealthReportGenerator>();
 builder.Services.AddSingleton<OpportunityLifetimeTracker>();
 builder.Services.AddSingleton<IOpportunityRepository>(_ => new SqliteOpportunityRepository(storagePaths.DatabasePath));
 builder.Services.AddSingleton<IReportExporter>(_ => new JsonReportExporter(storagePaths.ReportsPath));

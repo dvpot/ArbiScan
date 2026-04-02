@@ -1,6 +1,6 @@
 repo: ArbiScan
 branch: main
-latest_commit_sha: 9e2efd5353fff5c10bb665e3d1000e7306410967
+latest_commit_sha: cf035ecb1fccf9021af41ce25144289f0f254e71
 generated_at_utc: 2026-04-02T09:54:57Z
 
 .
@@ -27,6 +27,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   │   ├── IExchangeAdapter.cs
 │   │   ├── IFeeCalculator.cs
 │   │   ├── IFillableSizeCalculator.cs
+│   │   ├── IHealthReportGenerator.cs
 │   │   ├── IMarketDataSource.cs
 │   │   ├── IOpportunityDetector.cs
 │   │   ├── IOpportunityRepository.cs
@@ -39,6 +40,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │   │   ├── ExchangeMarketSnapshot.cs
 │   │   ├── ExchangeSymbolRules.cs
 │   │   ├── HealthEvent.cs
+│   │   ├── HealthReport.cs
 │   │   ├── MarketDataSnapshot.cs
 │   │   ├── OpportunityEvaluation.cs
 │   │   ├── OpportunityPairEvaluation.cs
@@ -54,6 +56,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 │       ├── ArbitrageDirectionExtensions.cs
 │       ├── FeeCalculator.cs
 │       ├── FillableSizeCalculator.cs
+│       ├── HealthReportGenerator.cs
 │       ├── OpportunityDetector.cs
 │       ├── OpportunityLifetimeTracker.cs
 │       ├── QuoteStalenessTracker.cs
@@ -90,14 +93,17 @@ generated_at_utc: 2026-04-02T09:54:57Z
 ├── ArbiScan.Tests
 │   ├── ArbiScan.Tests.csproj
 │   ├── CoreMathTests.cs
+│   ├── HealthReportGeneratorTests.cs
 │   └── QuoteStalenessTrackerTests.cs
 ├── ArbiScan.slnx
 ├── Directory.Build.props
 ├── Dockerfile
+├── QUICK-HANDOFF.md
 ├── README.md
 ├── config
 │   ├── appsettings.example.json
 │   └── telegramsettings.example.json
 ├── docker-compose.yml
 └── scripts
+    ├── collect-analysis-bundle.sh
     └── get-version.sh

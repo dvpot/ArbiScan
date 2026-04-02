@@ -24,6 +24,7 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
     private BybitRestClient? _restClient;
     private BybitSocketClient? _socketClient;
     private BybitSymbolOrderBook? _orderBook;
+    private DateTimeOffset? _lastUpdateCallbackUtc;
 
     public BybitSpotExchangeAdapter(
         string symbol,
@@ -86,6 +87,7 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
             },
             _loggerFactory,
             _socketClient);
+        _orderBook.OnOrderBookUpdate += _ => _lastUpdateCallbackUtc = DateTimeOffset.UtcNow;
 
         _logger.LogInformation("Bybit adapter initialized for {Symbol}", _symbol);
     }
@@ -129,6 +131,7 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
                 capturedAtUtc,
                 _orderBook.UpdateTime,
                 _orderBook.UpdateServerTime,
+                _lastUpdateCallbackUtc,
                 dataAge,
                 _orderBook.Bids.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray(),
                 _orderBook.Asks.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray()));

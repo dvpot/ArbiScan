@@ -62,6 +62,7 @@ Generated artifacts:
 - `reports/window-events-YYYYMMDD.jsonl`: closed opportunity windows
 - `reports/summaries-YYYYMMDD.jsonl`: machine-readable summaries
 - `reports/hourly-*.json`, `daily-*.json`, `cumulative-*.json`: summary snapshots
+- `reports/health-hourly-*.json`, `health-daily-*.json`, `health-cumulative-*.json`: aggregated health-only reports
 
 ## Configuration
 
@@ -103,14 +104,17 @@ Fields:
 - `NotifyOnShutdown`
 - `NotifyOnCriticalError`
 - `NotifyOnHealthStateChanges`
+- `HealthStateChangeMinNotifyIntervalSeconds`
+- `RequireStableHealthyBeforeNotifyMs`
+- `RequireStableDegradedBeforeNotifyMs`
 
 Notifications sent:
 
 - bot startup
 - bot shutdown with probable reason
 - critical errors in short form
-- health state transitions
-- periodic heartbeat with symbol, health, order book status, best bid/ask, data age and closed window count
+- debounced health state transitions with exchange-level status/data-age context
+- periodic heartbeat with symbol, health, callback/update timestamps, data age, closed window count, stale count, reconnect count and resync count
 
 ## Reports
 
@@ -145,6 +149,18 @@ Hourly, daily and cumulative summaries include:
 - health/reconnect/resync/stale counters
 - healthy vs degraded duration
 - computed final assessment text
+
+### Health Reports
+
+Dedicated health reports include:
+
+- reconnect count by exchange
+- resync count by exchange
+- stale count by exchange
+- healthy vs degraded duration
+- top degradation causes
+- longest stale interval by exchange
+- last stale / reconnect / resync timestamps by exchange
 
 ## Build And Test
 
@@ -227,6 +243,12 @@ Update on VPS:
 cd /opt/ArbiScan
 sudo docker compose pull
 sudo docker compose up -d
+```
+
+Collect runtime artifacts for follow-up analysis:
+
+```bash
+./scripts/collect-analysis-bundle.sh 20260402 /srv/ArbiScan
 ```
 
 ## Constraints And Assumptions

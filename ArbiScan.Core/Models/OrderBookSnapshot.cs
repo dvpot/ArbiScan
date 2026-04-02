@@ -8,6 +8,7 @@ public sealed record OrderBookSnapshot(
     DateTimeOffset CapturedAtUtc,
     DateTimeOffset? UpdateTimeUtc,
     DateTimeOffset? UpdateServerTimeUtc,
+    DateTimeOffset? LastUpdateCallbackUtc,
     TimeSpan DataAge,
     IReadOnlyList<OrderBookLevel> Bids,
     IReadOnlyList<OrderBookLevel> Asks)

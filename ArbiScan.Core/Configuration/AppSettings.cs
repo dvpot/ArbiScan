@@ -133,6 +133,15 @@ public sealed class TelegramSettings
     public bool NotifyOnCriticalError { get; init; } = true;
 
     public bool NotifyOnHealthStateChanges { get; init; } = true;
+
+    [Range(0, 86_400)]
+    public int HealthStateChangeMinNotifyIntervalSeconds { get; init; } = 60;
+
+    [Range(0, 86_400_000)]
+    public int RequireStableHealthyBeforeNotifyMs { get; init; } = 5_000;
+
+    [Range(0, 86_400_000)]
+    public int RequireStableDegradedBeforeNotifyMs { get; init; } = 5_000;
 }
 
 public sealed class ExchangeConnectionSettings

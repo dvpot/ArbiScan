@@ -37,6 +37,7 @@ public sealed class CoreMathTests
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
             TimeSpan.Zero,
             [new OrderBookLevel(0.249m, 100m), new OrderBookLevel(0.248m, 100m)],
             [new OrderBookLevel(0.250m, 100m), new OrderBookLevel(0.251m, 100m)]);
@@ -139,6 +140,7 @@ public sealed class CoreMathTests
         var book = new OrderBookSnapshot(
             "TRXUSDT",
             OrderBookSyncStatus.Synced,
+            DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
