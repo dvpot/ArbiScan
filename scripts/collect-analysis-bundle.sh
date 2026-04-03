@@ -70,6 +70,7 @@ copy_matching_files "${logs_root}" "application-*.log"
 copy_if_exists "${reports_root}/health-events-${analysis_date}.jsonl" "health-events-${analysis_date}.jsonl"
 copy_if_exists "${reports_root}/orderbook-snapshots-${analysis_date}.jsonl" "orderbook-snapshots-${analysis_date}.jsonl"
 copy_if_exists "${reports_root}/stale-diagnostics-${analysis_date}.jsonl" "stale-diagnostics-${analysis_date}.jsonl"
+copy_if_exists "${reports_root}/rejected-positive-signals-${analysis_date}.jsonl" "rejected-positive-signals-${analysis_date}.jsonl"
 
 if [[ -f "${reports_root}/window-events-${analysis_date}.jsonl" ]]; then
   cp "${reports_root}/window-events-${analysis_date}.jsonl" "${bundle_dir}/window-events-${analysis_date}.jsonl"
@@ -150,6 +151,7 @@ Included when available:
 - health-events jsonl
 - orderbook-snapshots jsonl
 - stale-diagnostics jsonl
+- rejected-positive-signals jsonl
 - window-events jsonl or explicit missing marker
 - hourly/daily/cumulative summaries
 - health-hourly/health-daily/health-cumulative reports

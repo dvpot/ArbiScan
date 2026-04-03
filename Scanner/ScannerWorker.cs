@@ -15,6 +15,8 @@ namespace ArbiScan.Scanner;
 
 public sealed class ScannerWorker : BackgroundService
 {
+    private const double QuietMarketEmergencyThresholdMultiplier = 3d;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
@@ -125,10 +127,14 @@ public sealed class ScannerWorker : BackgroundService
                     {
                         var evaluation = _detector.Evaluate(marketSnapshot, direction, notional, _settings);
                         var trackingResult = _lifetimeTracker.Process(_settings.Symbol, evaluation, _settings);
-                        _runtimeTelemetry.RecordEvaluationTelemetry(
-                            new EvaluationTelemetrySnapshot(
-                                evaluation.TimestampUtc,
-                                BuildEvaluationDebugStats(marketSnapshot, evaluation, trackingResult.RejectedDueToMinLifetime, _settings)));
+                        var telemetry = BuildEvaluationTelemetry(marketSnapshot, evaluation, trackingResult.RejectedDueToMinLifetime, _settings);
+                        _runtimeTelemetry.RecordEvaluationTelemetry(telemetry);
+                        if (telemetry.IsRawPositiveCross && !telemetry.IsProfitable)
+                        {
+                            var rejectedSignal = BuildRejectedPositiveSignalEvent(marketSnapshot, evaluation, telemetry);
+                            _runtimeTelemetry.RecordRejectedPositiveSignal(rejectedSignal);
+                            await _exporter.ExportRejectedPositiveSignalAsync(rejectedSignal, stoppingToken);
+                        }
 
                         foreach (var window in trackingResult.ClosedWindows)
                         {
@@ -203,7 +209,7 @@ public sealed class ScannerWorker : BackgroundService
                 flags |= DataHealthFlags.BinanceOutOfSync;
             }
 
-            if (IsStale(binance, capturedAtUtc, staleThreshold, staleConfirmationWindow))
+            if (GetStaleState(binance, capturedAtUtc, staleThreshold, staleConfirmationWindow) == StaleState.Stale)
             {
                 flags |= DataHealthFlags.BinanceStale;
             }
@@ -221,9 +227,14 @@ public sealed class ScannerWorker : BackgroundService
                 flags |= DataHealthFlags.BybitOutOfSync;
             }
 
-            if (IsStale(bybit, capturedAtUtc, staleThreshold, staleConfirmationWindow))
+            var bybitStaleState = GetStaleState(bybit, capturedAtUtc, staleThreshold, staleConfirmationWindow);
+            if (bybitStaleState == StaleState.Stale)
             {
                 flags |= DataHealthFlags.BybitStale;
+            }
+            else if (bybitStaleState == StaleState.Quiet)
+            {
+                flags |= DataHealthFlags.BybitQuietMarket;
             }
 
             if (bybit.OrderBook.Bids.Count == 0 || bybit.OrderBook.Asks.Count == 0)
@@ -237,7 +248,7 @@ public sealed class ScannerWorker : BackgroundService
             flags |= DataHealthFlags.MissingSymbolRules;
         }
 
-        if (flags != DataHealthFlags.None)
+        if (HasHardDegradation(flags))
         {
             flags |= DataHealthFlags.Degraded;
         }
@@ -245,7 +256,7 @@ public sealed class ScannerWorker : BackgroundService
         return new MarketDataSnapshot(_settings.Symbol, capturedAtUtc, binance, bybit, flags);
     }
 
-    private bool IsStale(
+    private StaleState GetStaleState(
         ExchangeMarketSnapshot snapshot,
         DateTimeOffset capturedAtUtc,
         TimeSpan staleThreshold,
@@ -254,15 +265,26 @@ public sealed class ScannerWorker : BackgroundService
         if (snapshot.OrderBook.Status != OrderBookSyncStatus.Synced)
         {
             _quoteStalenessTracker.Reset(snapshot.Exchange);
-            return false;
+            return StaleState.Fresh;
         }
 
-        return _quoteStalenessTracker.IsStale(
+        var staleConfirmed = _quoteStalenessTracker.IsStale(
             snapshot.Exchange,
             capturedAtUtc,
             snapshot.OrderBook.DataAgeByExchangeTimestamp,
             staleThreshold,
             staleConfirmationWindow);
+        if (!staleConfirmed)
+        {
+            return StaleState.Fresh;
+        }
+
+        if (snapshot.Exchange == ExchangeId.Bybit && IsQuietBybitMarket(snapshot, staleThreshold))
+        {
+            return StaleState.Quiet;
+        }
+
+        return StaleState.Stale;
     }
 
     private async Task DetectHealthTransitionsAsync(
@@ -274,7 +296,7 @@ public sealed class ScannerWorker : BackgroundService
         await TrackExchangeStatusAsync(snapshot.Binance, cancellationToken);
         await TrackExchangeStatusAsync(snapshot.Bybit, cancellationToken);
 
-        var currentHealthy = snapshot.HealthFlags == DataHealthFlags.None;
+        var currentHealthy = !HasHardDegradation(snapshot.HealthFlags);
         if (snapshot.HealthFlags != _previousHealthFlags)
         {
             await HandleStaleTransitionsAsync(snapshot, currentHealthy, loopStartedAtUtc, loopFinishedAtUtc, cancellationToken);
@@ -386,7 +408,7 @@ public sealed class ScannerWorker : BackgroundService
         var healthEvents = await _repository.GetHealthEventsAsync(fromUtc, toUtc, cancellationToken);
         var evaluationTelemetry = _runtimeTelemetry.GetEvaluationTelemetry(fromUtc, toUtc);
         var staleDiagnostics = _runtimeTelemetry.GetStaleDiagnostics(fromUtc, toUtc);
-        var summary = _summaryGenerator.Generate(period, fromUtc, toUtc, windows, healthEvents, evaluationTelemetry);
+        var summary = _summaryGenerator.Generate(period, fromUtc, toUtc, _settings.Symbol, windows, healthEvents, evaluationTelemetry);
         var healthReport = _healthReportGenerator.Generate(period, fromUtc, toUtc, _settings.Symbol, healthEvents, staleDiagnostics);
         await _repository.SaveSummaryAsync(summary, cancellationToken);
         await _exporter.ExportSummaryAsync(summary, cancellationToken);
@@ -683,44 +705,45 @@ public sealed class ScannerWorker : BackgroundService
         }
     }
 
-    private SummaryDebugStats BuildEvaluationDebugStats(
+    private EvaluationTelemetrySnapshot BuildEvaluationTelemetry(
         MarketDataSnapshot snapshot,
         OpportunityPairEvaluation evaluation,
         bool rejectedDueToMinLifetime,
         AppSettings settings)
     {
         var rawPositiveCross = HasRawPositiveCross(snapshot, evaluation.Direction);
-        if (!rawPositiveCross)
-        {
-            return new SummaryDebugStats(0, 0, 0, 0, rejectedDueToMinLifetime ? 1 : 0, 0, 0, 0);
-        }
-
         var conservative = evaluation.Conservative;
         var profitable = conservative.IsProfitable(
             settings.Thresholds.EntryThresholdUsd,
             settings.Thresholds.EntryThresholdBps);
-        var rejectedDueToHealth = !profitable && conservative.HealthFlags != DataHealthFlags.None;
-        var rejectedDueToRules = !profitable && string.Equals(conservative.RejectReason, "Symbol minimums not met", StringComparison.Ordinal);
-        var rejectedDueToFillability = !profitable && !rejectedDueToHealth && !rejectedDueToRules &&
-                                       (conservative.FillabilityStatus != FillabilityStatus.Fillable ||
-                                        conservative.RejectReason is "Executable quantity rounded to zero" or "Insufficient depth for executable quantity" or "Missing market snapshot");
-        var rejectedDueToFees = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability &&
-                                conservative.GrossPnlUsd > 0m &&
-                                conservative.GrossPnlUsd - conservative.FeesTotalUsd <= 0m;
-        var rejectedDueToBuffers = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability &&
-                                   conservative.GrossPnlUsd - conservative.FeesTotalUsd > 0m &&
-                                   conservative.NetPnlUsd <= 0m;
-        var rejectedDueToOther = !profitable && !rejectedDueToHealth && !rejectedDueToRules && !rejectedDueToFillability && !rejectedDueToFees && !rejectedDueToBuffers;
+        var rejectReasons = rawPositiveCross
+            ? DetermineRejectReasons(snapshot, evaluation, profitable, rejectedDueToMinLifetime)
+            : [];
+        var buyCostUsd = conservative.BuyLeg?.GrossQuoteAmountUsd ?? 0m;
+        var netBeforeFeesUsd = conservative.GrossPnlUsd - conservative.BuffersTotalUsd;
+        var netEdgeBeforeFeesPct = buyCostUsd > 0m ? netBeforeFeesUsd / buyCostUsd : 0m;
 
-        return new SummaryDebugStats(
-            1,
-            rejectedDueToFees ? 1 : 0,
-            rejectedDueToBuffers ? 1 : 0,
-            rejectedDueToHealth ? 1 : 0,
-            rejectedDueToMinLifetime ? 1 : 0,
-            rejectedDueToFillability ? 1 : 0,
-            rejectedDueToRules ? 1 : 0,
-            rejectedDueToOther ? 1 : 0);
+        return new EvaluationTelemetrySnapshot(
+            evaluation.TimestampUtc,
+            snapshot.Symbol,
+            evaluation.Direction,
+            evaluation.TestNotionalUsd,
+            rawPositiveCross,
+            profitable,
+            !HasHardDegradation(snapshot.HealthFlags),
+            conservative.FillabilityStatus,
+            conservative.GrossPnlUsd,
+            conservative.GrossEdgePct,
+            netEdgeBeforeFeesPct,
+            conservative.FeesTotalUsd,
+            conservative.BuffersTotalUsd,
+            conservative.FillableBaseQuantity,
+            snapshot.HealthFlags,
+            rejectReasons,
+            evaluation.BinanceBestBid,
+            evaluation.BinanceBestAsk,
+            evaluation.BybitBestBid,
+            evaluation.BybitBestAsk);
     }
 
     private bool HasRawPositiveCross(MarketDataSnapshot snapshot, ArbitrageDirection direction)
@@ -731,6 +754,85 @@ public sealed class ScannerWorker : BackgroundService
         var sellBid = sellSnapshot?.OrderBook.BestBid?.Price;
         return buyAsk.HasValue && sellBid.HasValue && sellBid.Value > buyAsk.Value;
     }
+
+    private IReadOnlyList<string> DetermineRejectReasons(
+        MarketDataSnapshot snapshot,
+        OpportunityPairEvaluation evaluation,
+        bool profitable,
+        bool rejectedDueToMinLifetime)
+    {
+        if (profitable)
+        {
+            return rejectedDueToMinLifetime ? ["min_lifetime"] : [];
+        }
+
+        var conservative = evaluation.Conservative;
+        var reasons = new List<string>();
+
+        if (HasHardDegradation(snapshot.HealthFlags))
+        {
+            reasons.Add("health");
+        }
+
+        if (string.Equals(conservative.RejectReason, "Symbol minimums not met", StringComparison.Ordinal))
+        {
+            reasons.Add("rules");
+        }
+
+        if (conservative.FillabilityStatus != FillabilityStatus.Fillable ||
+            conservative.RejectReason is "Executable quantity rounded to zero" or "Insufficient depth for executable quantity" or "Missing market snapshot")
+        {
+            reasons.Add("fillability");
+        }
+
+        if (conservative.GrossPnlUsd > 0m && conservative.GrossPnlUsd - conservative.FeesTotalUsd <= 0m)
+        {
+            reasons.Add("fees");
+        }
+
+        if (conservative.GrossPnlUsd - conservative.FeesTotalUsd > 0m && conservative.NetPnlUsd <= 0m)
+        {
+            reasons.Add("buffers");
+        }
+
+        if (rejectedDueToMinLifetime)
+        {
+            reasons.Add("min_lifetime");
+        }
+
+        if (reasons.Count == 0)
+        {
+            reasons.Add("other");
+        }
+
+        return reasons
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private RejectedPositiveSignalEvent BuildRejectedPositiveSignalEvent(
+        MarketDataSnapshot snapshot,
+        OpportunityPairEvaluation evaluation,
+        EvaluationTelemetrySnapshot telemetry) =>
+        new(
+            telemetry.TimestampUtc,
+            snapshot.Symbol,
+            telemetry.Direction,
+            telemetry.TestNotionalUsd,
+            telemetry.BinanceBestBid,
+            telemetry.BinanceBestAsk,
+            telemetry.BybitBestBid,
+            telemetry.BybitBestAsk,
+            telemetry.GrossEdgePct,
+            telemetry.NetEdgeBeforeFeesPct,
+            telemetry.FeesTotalUsd,
+            telemetry.BuffersTotalUsd,
+            telemetry.FillabilityStatus,
+            telemetry.FillableBaseQuantity,
+            telemetry.RejectReasons,
+            telemetry.HealthFlags,
+            telemetry.IsSnapshotUsableForEvaluation);
 
     private StaleDiagnosticEvent BuildStaleDiagnosticEvent(
         MarketDataSnapshot snapshot,
@@ -769,7 +871,7 @@ public sealed class ScannerWorker : BackgroundService
             loopFinishedAtUtc,
             (loopFinishedAtUtc - loopStartedAtUtc).TotalMilliseconds,
             Environment.CurrentManagedThreadId,
-            snapshot.HealthFlags == DataHealthFlags.None,
+            !HasHardDegradation(snapshot.HealthFlags),
             degradedFlags,
             DetermineStaleLikelyRootCause(exchangeSnapshot));
     }
@@ -781,6 +883,12 @@ public sealed class ScannerWorker : BackgroundService
             ExchangeId.Bybit => flags.HasFlag(DataHealthFlags.BybitStale),
             _ => false
         };
+
+    private static bool HasHardDegradation(DataHealthFlags flags)
+    {
+        var hardFlags = flags & ~DataHealthFlags.BybitQuietMarket;
+        return hardFlags != DataHealthFlags.None;
+    }
 
     private static DataHealthFlags BuildExchangeSpecificStaleFlags(ExchangeId exchange, DataHealthFlags snapshotFlags, bool currentStale)
     {
@@ -798,6 +906,22 @@ public sealed class ScannerWorker : BackgroundService
         }
 
         return baseFlags | exchangeFlag | DataHealthFlags.Degraded;
+    }
+
+    private bool IsQuietBybitMarket(ExchangeMarketSnapshot snapshot, TimeSpan staleThreshold)
+    {
+        var callbackSilenceMs = snapshot.OrderBook.DataAgeByLocalCallbackTimestamp.TotalMilliseconds;
+        var exchangeAgeMs = snapshot.OrderBook.DataAgeByExchangeTimestamp.TotalMilliseconds;
+        var topChangeAgeMs = snapshot.OrderBook.TimeSinceTopOfBookChanged.TotalMilliseconds;
+        var thresholdMs = staleThreshold.TotalMilliseconds;
+        var emergencyThresholdMs = thresholdMs * QuietMarketEmergencyThresholdMultiplier;
+        var agesAlmostEqual = Math.Abs(callbackSilenceMs - exchangeAgeMs) <= 250d;
+
+        return snapshot.OrderBook.Status == OrderBookSyncStatus.Synced &&
+               topChangeAgeMs >= thresholdMs &&
+               agesAlmostEqual &&
+               exchangeAgeMs < emergencyThresholdMs &&
+               callbackSilenceMs < emergencyThresholdMs;
     }
 
     private static IEnumerable<string> ExpandFlags(DataHealthFlags flags)
@@ -838,7 +962,19 @@ public sealed class ScannerWorker : BackgroundService
             return "top_of_book_unchanged";
         }
 
+        if (exchangeSnapshot.Exchange == ExchangeId.Bybit && IsQuietBybitMarket(exchangeSnapshot, TimeSpan.FromMilliseconds(_settings.QuoteStalenessThresholdMs)))
+        {
+            return "callback_gap_without_book_change";
+        }
+
         return "unknown";
+    }
+
+    private enum StaleState
+    {
+        Fresh = 0,
+        Quiet = 1,
+        Stale = 2
     }
 
     private static string Shorten(string value, int maxLength) =>

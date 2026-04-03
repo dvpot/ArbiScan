@@ -26,6 +26,9 @@ public sealed class JsonReportExporter : IReportExporter
     public Task ExportHealthEventAsync(HealthEvent healthEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"health-events-{healthEvent.TimestampUtc:yyyyMMdd}.jsonl"), healthEvent, cancellationToken);
 
+    public Task ExportRejectedPositiveSignalAsync(RejectedPositiveSignalEvent signalEvent, CancellationToken cancellationToken) =>
+        AppendJsonLineAsync(Path.Combine(_reportsPath, $"rejected-positive-signals-{signalEvent.TimestampUtc:yyyyMMdd}.jsonl"), signalEvent, cancellationToken);
+
     public Task ExportStaleDiagnosticAsync(StaleDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"stale-diagnostics-{diagnosticEvent.TimestampUtc:yyyyMMdd}.jsonl"), diagnosticEvent, cancellationToken);
 

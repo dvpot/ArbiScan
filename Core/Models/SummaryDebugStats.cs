@@ -8,4 +8,11 @@ public sealed record SummaryDebugStats(
     int RejectedDueToMinLifetimeCount,
     int RejectedDueToFillabilityCount,
     int RejectedDueToRulesCount,
-    int RejectedDueToOtherCount);
+    int RejectedDueToOtherCount,
+    int RejectedOnlyDueToFeesCount,
+    int RejectedOnlyDueToFillabilityCount,
+    int RejectedDueToMultipleReasonsCount,
+    IReadOnlyDictionary<string, int> RawPositiveCrossCountByDirection,
+    IReadOnlyDictionary<string, int> RejectReasonCountsByDirection,
+    IReadOnlyDictionary<string, int> RejectReasonCountsByNotional,
+    IReadOnlyDictionary<string, int> RejectReasonCountsByDirectionAndNotional);

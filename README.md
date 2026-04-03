@@ -60,6 +60,8 @@ Generated artifacts:
 - `logs/application-YYYYMMDD.log`: rolling application log
 - `reports/orderbook-snapshots-YYYYMMDD.jsonl`: periodic raw order book snapshots
 - `reports/health-events-YYYYMMDD.jsonl`: health and degraded-state events
+- `reports/stale-diagnostics-YYYYMMDD.jsonl`: per-stale/per-recovery diagnostics
+- `reports/rejected-positive-signals-YYYYMMDD.jsonl`: raw-positive signals rejected before windowing
 - `reports/window-events-YYYYMMDD.jsonl`: closed opportunity windows
 - `reports/summaries-YYYYMMDD.jsonl`: machine-readable summaries
 - `reports/hourly-*.json`, `daily-*.json`, `cumulative-*.json`: summary snapshots
@@ -142,6 +144,8 @@ Each closed window export includes:
 Hourly, daily and cumulative summaries include:
 
 - window counts by direction and notional
+- raw-positive cross counts by direction
+- reject reasons by direction, by notional, and by direction+notional
 - positive gross/net counts
 - lifetime distribution
 - pnl distributions
@@ -158,6 +162,9 @@ Dedicated health reports include:
 - reconnect count by exchange
 - resync count by exchange
 - stale count by exchange
+- stale detected/recovered/flap counts by exchange
+- stale/data-age/callback-silence aggregates by exchange
+- rough stale root-cause classification by exchange
 - healthy vs degraded duration
 - top degradation causes
 - longest stale interval by exchange

@@ -8,6 +8,7 @@ public interface ISummaryGenerator
         SummaryPeriod period,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
+        string symbol,
         IReadOnlyCollection<OpportunityWindowEvent> windows,
         IReadOnlyCollection<HealthEvent> healthEvents,
         IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry);

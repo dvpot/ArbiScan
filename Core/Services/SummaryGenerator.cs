@@ -10,6 +10,7 @@ public sealed class SummaryGenerator : ISummaryGenerator
         SummaryPeriod period,
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
+        string symbol,
         IReadOnlyCollection<OpportunityWindowEvent> windows,
         IReadOnlyCollection<HealthEvent> healthEvents,
         IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry)
@@ -17,7 +18,6 @@ public sealed class SummaryGenerator : ISummaryGenerator
         var orderedWindows = windows.OrderBy(x => x.OpenedAtUtc).ToArray();
         var orderedHealth = healthEvents.OrderBy(x => x.TimestampUtc).ToArray();
         var debugStats = AggregateDebugStats(evaluationTelemetry);
-        var symbol = orderedWindows.FirstOrDefault()?.Symbol ?? "N/A";
         var lifetimes = orderedWindows.Select(x => (double)x.LifetimeMs).OrderBy(x => x).ToArray();
         var netPnls = orderedWindows.Select(x => x.ConservativeNetPnlUsd).OrderBy(x => x).ToArray();
         var fillableSizes = orderedWindows.Select(x => x.FillableBaseQuantity).OrderBy(x => x).ToArray();
@@ -150,20 +150,48 @@ public sealed class SummaryGenerator : ISummaryGenerator
 
     private static SummaryDebugStats AggregateDebugStats(IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry)
     {
-        if (evaluationTelemetry.Count == 0)
-        {
-            return new SummaryDebugStats(0, 0, 0, 0, 0, 0, 0, 0);
-        }
+        var rawPositive = evaluationTelemetry.Where(x => x.IsRawPositiveCross).ToArray();
+        var rejected = rawPositive.Where(x => !x.IsProfitable).ToArray();
+
+        var rawPositiveByDirection = rawPositive
+            .GroupBy(x => x.Direction.ToString())
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rejectReasonCountsByDirection = rejected
+            .SelectMany(x => x.RejectReasons.Select(reason => $"{x.Direction}:{reason}"))
+            .GroupBy(x => x)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rejectReasonCountsByNotional = rejected
+            .SelectMany(x => x.RejectReasons.Select(reason => $"{x.TestNotionalUsd:0.########}:{reason}"))
+            .GroupBy(x => x)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rejectReasonCountsByDirectionAndNotional = rejected
+            .SelectMany(x => x.RejectReasons.Select(reason => $"{x.Direction}:{x.TestNotionalUsd:0.########}:{reason}"))
+            .GroupBy(x => x)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var rejectedOnlyDueToFeesCount = rejected.Count(x => x.RejectReasons.SequenceEqual(["fees"]));
+        var rejectedOnlyDueToFillabilityCount = rejected.Count(x => x.RejectReasons.SequenceEqual(["fillability"]));
+        var rejectedDueToMultipleReasonsCount = rejected.Count(x => x.RejectReasons.Count > 1);
 
         return new SummaryDebugStats(
-            evaluationTelemetry.Sum(x => x.DebugStats.RawPositiveCrossCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToFeesCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToBuffersCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToHealthCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToMinLifetimeCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToFillabilityCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToRulesCount),
-            evaluationTelemetry.Sum(x => x.DebugStats.RejectedDueToOtherCount));
+            rawPositive.Length,
+            rejected.Count(x => x.RejectReasons.Contains("fees")),
+            rejected.Count(x => x.RejectReasons.Contains("buffers")),
+            rejected.Count(x => x.RejectReasons.Contains("health")),
+            rejected.Count(x => x.RejectReasons.Contains("min_lifetime")),
+            rejected.Count(x => x.RejectReasons.Contains("fillability")),
+            rejected.Count(x => x.RejectReasons.Contains("rules")),
+            rejected.Count(x => x.RejectReasons.Contains("other")),
+            rejectedOnlyDueToFeesCount,
+            rejectedOnlyDueToFillabilityCount,
+            rejectedDueToMultipleReasonsCount,
+            rawPositiveByDirection,
+            rejectReasonCountsByDirection,
+            rejectReasonCountsByNotional,
+            rejectReasonCountsByDirectionAndNotional);
     }
 
     private static string BuildFinalAssessment(IReadOnlyCollection<OpportunityWindowEvent> windows, SummaryDebugStats debugStats)

@@ -11,5 +11,6 @@ public enum DataHealthFlags
     MissingSymbolRules = 1 << 4,
     MissingOrderBook = 1 << 5,
     InsufficientDepth = 1 << 6,
-    Degraded = 1 << 7
+    Degraded = 1 << 7,
+    BybitQuietMarket = 1 << 8
 }

@@ -107,20 +107,25 @@ public sealed class CoreMathTests
 
         var telemetry = new[]
         {
-            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(5), new SummaryDebugStats(3, 1, 1, 0, 0, 1, 0, 0)),
-            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(15), new SummaryDebugStats(2, 0, 0, 1, 1, 0, 1, 0))
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(5), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, false, true, FillabilityStatus.PartiallyFillable, 0.2m, 0.01m, 0.005m, 0.03m, 0.01m, 40m, DataHealthFlags.None, ["fees", "fillability"], 0.25m, 0.251m, 0.26m, 0.261m),
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(15), "TRXUSDT", ArbitrageDirection.BuyBybitSellBinance, 20m, true, false, false, FillabilityStatus.NotFillable, 0.1m, 0.006m, 0.006m, 0.2m, 0.01m, 10m, DataHealthFlags.Degraded, ["health", "min_lifetime", "rules"], 0.25m, 0.251m, 0.26m, 0.261m),
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(20), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, true, true, FillabilityStatus.Fillable, 0.3m, 0.015m, 0.014m, 0.01m, 0.01m, 50m, DataHealthFlags.None, [], 0.25m, 0.251m, 0.26m, 0.261m)
         };
 
-        var summary = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, windows, health, telemetry);
+        var summary = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, "TRXUSDT", windows, health, telemetry);
 
         Assert.Equal(2, summary.TotalWindows);
+        Assert.Equal("TRXUSDT", summary.Symbol);
         Assert.Equal(1, summary.FillableCount);
         Assert.Equal(1, summary.PartiallyFillableCount);
         Assert.Equal(0m, Math.Round(summary.TotalNetPnlUsd, 1));
         Assert.True(summary.HealthyDurationMs > 0);
         Assert.True(summary.DegradedDurationMs > 0);
-        Assert.Equal(5, summary.DebugStats.RawPositiveCrossCount);
+        Assert.Equal(3, summary.DebugStats.RawPositiveCrossCount);
         Assert.Equal(1, summary.DebugStats.RejectedDueToMinLifetimeCount);
+        Assert.Equal(2, summary.DebugStats.RejectedDueToMultipleReasonsCount);
+        Assert.Equal(2, summary.DebugStats.RawPositiveCrossCountByDirection["BuyBinanceSellBybit"]);
+        Assert.Equal(1, summary.DebugStats.RejectReasonCountsByNotional["10:fees"]);
     }
 
     private static AppSettings CreateSettings(int minWindowLifetimeMs = 1_000) =>
