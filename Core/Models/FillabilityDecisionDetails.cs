@@ -1,0 +1,25 @@
+namespace ArbiScan.Core.Models;
+
+public sealed record FillabilityDecisionDetails(
+    string DecisionCode,
+    string DecisionSummary,
+    decimal RequestedQuoteUsd,
+    decimal RequiredBaseQuantity,
+    decimal BuyTopOfBookQuantity,
+    decimal SellTopOfBookQuantity,
+    decimal EffectiveTopOfBookQuantity,
+    decimal BuyAggregatedFillableQuantity,
+    decimal SellAggregatedFillableQuantity,
+    decimal EffectiveAggregatedFillableQuantity,
+    decimal QuantityBeforeRounding,
+    decimal QuantityAfterRoundingBinanceRules,
+    decimal QuantityAfterRoundingBybitRules,
+    decimal EffectiveExecutableQuantity,
+    decimal BuyExecutedQuantityForEffectiveSize,
+    decimal SellExecutedQuantityForEffectiveSize,
+    bool BuyDepthFullyFilledForEffectiveSize,
+    bool SellDepthFullyFilledForEffectiveSize,
+    int BuyConsumedLevelsForRequestedQuote,
+    int BuyConsumedLevelsForEffectiveSize,
+    int SellConsumedLevelsForEffectiveSize,
+    string? Detail);
