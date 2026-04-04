@@ -27,10 +27,12 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        var command = connection.CreateCommand();
-        command.CommandText =
+        await EnsureCompatibleTableAsync(
+            connection,
+            "raw_signal_events",
+            ["timestamp_utc", "symbol", "direction", "test_notional_usd", "signal_class", "net_edge_usd", "payload_json"],
             """
-            CREATE TABLE IF NOT EXISTS raw_signal_events (
+            CREATE TABLE raw_signal_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_utc TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -40,8 +42,15 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
                 net_edge_usd REAL NOT NULL,
                 payload_json TEXT NOT NULL
             );
+            """,
+            cancellationToken);
 
-            CREATE TABLE IF NOT EXISTS health_events (
+        await EnsureCompatibleTableAsync(
+            connection,
+            "health_events",
+            ["timestamp_utc", "event_type", "exchange_id", "flags", "is_healthy_after_event", "message"],
+            """
+            CREATE TABLE health_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_utc TEXT NOT NULL,
                 event_type INTEGER NOT NULL,
@@ -50,8 +59,15 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
                 is_healthy_after_event INTEGER NOT NULL,
                 message TEXT NOT NULL
             );
+            """,
+            cancellationToken);
 
-            CREATE TABLE IF NOT EXISTS window_events (
+        await EnsureCompatibleTableAsync(
+            connection,
+            "window_events",
+            ["window_id", "symbol", "direction", "test_notional_usd", "opened_at_utc", "closed_at_utc", "duration_ms", "payload_json"],
+            """
+            CREATE TABLE window_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 window_id TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -62,8 +78,15 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
                 duration_ms INTEGER NOT NULL,
                 payload_json TEXT NOT NULL
             );
+            """,
+            cancellationToken);
 
-            CREATE TABLE IF NOT EXISTS summary_reports (
+        await EnsureCompatibleTableAsync(
+            connection,
+            "summary_reports",
+            ["generated_at_utc", "period", "from_utc", "to_utc", "symbol", "payload_json"],
+            """
+            CREATE TABLE summary_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 generated_at_utc TEXT NOT NULL,
                 period INTEGER NOT NULL,
@@ -72,8 +95,15 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
                 symbol TEXT NOT NULL,
                 payload_json TEXT NOT NULL
             );
+            """,
+            cancellationToken);
 
-            CREATE TABLE IF NOT EXISTS health_reports (
+        await EnsureCompatibleTableAsync(
+            connection,
+            "health_reports",
+            ["generated_at_utc", "period", "from_utc", "to_utc", "symbol", "payload_json"],
+            """
+            CREATE TABLE health_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 generated_at_utc TEXT NOT NULL,
                 period INTEGER NOT NULL,
@@ -82,9 +112,8 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
                 symbol TEXT NOT NULL,
                 payload_json TEXT NOT NULL
             );
-            """;
-
-        await command.ExecuteNonQueryAsync(cancellationToken);
+            """,
+            cancellationToken);
     }
 
     public async Task SaveRawSignalEventAsync(RawSignalEvent signalEvent, CancellationToken cancellationToken)
@@ -294,5 +323,59 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         return connection;
+    }
+
+    private static async Task EnsureCompatibleTableAsync(
+        SqliteConnection connection,
+        string tableName,
+        IReadOnlyCollection<string> requiredColumns,
+        string createTableSql,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, tableName, cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, createTableSql, cancellationToken);
+            return;
+        }
+
+        var existingColumns = await GetTableColumnsAsync(connection, tableName, cancellationToken);
+        if (requiredColumns.All(existingColumns.Contains))
+        {
+            return;
+        }
+
+        await ExecuteNonQueryAsync(connection, $"DROP TABLE IF EXISTS {tableName};", cancellationToken);
+        await ExecuteNonQueryAsync(connection, createTableSql, cancellationToken);
+    }
+
+    private static async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $table_name;";
+        command.Parameters.AddWithValue("$table_name", tableName);
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt32(result) > 0;
+    }
+
+    private static async Task<HashSet<string>> GetTableColumnsAsync(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        return columns;
+    }
+
+    private static async Task ExecuteNonQueryAsync(SqliteConnection connection, string commandText, CancellationToken cancellationToken)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }
