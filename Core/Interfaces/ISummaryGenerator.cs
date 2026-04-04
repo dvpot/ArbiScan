@@ -9,7 +9,6 @@ public interface ISummaryGenerator
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         string symbol,
-        IReadOnlyCollection<OpportunityWindowEvent> windows,
-        IReadOnlyCollection<HealthEvent> healthEvents,
-        IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry);
+        IReadOnlyCollection<RawSignalEvent> signalEvents,
+        IReadOnlyCollection<OpportunityWindowEvent> windows);
 }

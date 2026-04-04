@@ -5,9 +5,8 @@ using ArbiScan.Core.Models;
 using Bybit.Net;
 using Bybit.Net.Clients;
 using Bybit.Net.Enums;
-using Bybit.Net.Objects.Models.V5;
 using Bybit.Net.SymbolOrderBooks;
-using CryptoExchange.Net.Objects;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace ArbiScan.Exchanges.Bybit;
@@ -15,37 +14,34 @@ namespace ArbiScan.Exchanges.Bybit;
 public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
 {
     private readonly string _symbol;
-    private readonly int _depth;
     private readonly RuntimeMode _runtimeMode;
     private readonly ExchangeConnectionSettings _connectionSettings;
     private readonly ILogger<BybitSpotExchangeAdapter> _logger;
-    private readonly ILoggerFactory _loggerFactory;
 
     private BybitRestClient? _restClient;
     private BybitSocketClient? _socketClient;
     private BybitSymbolOrderBook? _orderBook;
-    private DateTimeOffset? _lastUpdateCallbackUtc;
-    private DateTimeOffset? _lastTopOfBookChangeUtc;
-    private OrderBookLevel? _lastTopBid;
-    private OrderBookLevel? _lastTopAsk;
+    private decimal? _bestBidPrice;
+    private decimal? _bestBidQuantity;
+    private decimal? _bestAskPrice;
+    private decimal? _bestAskQuantity;
+    private DateTimeOffset? _lastUpdateUtc;
+    private bool _isConnected;
+    private int _errorCount;
 
     public BybitSpotExchangeAdapter(
         string symbol,
-        int depth,
         RuntimeMode runtimeMode,
         ExchangeConnectionSettings connectionSettings,
-        ILogger<BybitSpotExchangeAdapter> logger,
-        ILoggerFactory loggerFactory)
+        ILogger<BybitSpotExchangeAdapter> logger)
     {
         _symbol = symbol;
-        _depth = depth;
         _runtimeMode = runtimeMode;
         _connectionSettings = connectionSettings;
         _logger = logger;
-        _loggerFactory = loggerFactory;
     }
 
-    public ExchangeSymbolRules? Rules { get; private set; }
+    public ExchangeId Exchange => ExchangeId.Bybit;
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -72,39 +68,37 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
         });
 
         var symbolInfo = await _restClient.V5Api.ExchangeData.GetSpotSymbolsAsync(_symbol, cancellationToken);
-        if (!symbolInfo.Success || symbolInfo.Data is null)
+        if (!symbolInfo.Success || symbolInfo.Data is null || !symbolInfo.Data.List.Any())
         {
             throw new InvalidOperationException($"Unable to load Bybit symbol metadata for {_symbol}: {symbolInfo.Error}");
         }
 
-        var symbol = symbolInfo.Data.List.Single();
-        Rules = MapRules(symbol);
-
-        _orderBook = new BybitSymbolOrderBook(
-            _symbol,
-            Category.Spot,
-            options =>
-            {
-                options.Limit = ResolveSubscriptionDepth(_depth);
-                options.InitialDataTimeout = TimeSpan.FromSeconds(30);
-            },
-            _loggerFactory,
-            _socketClient);
-        _orderBook.OnOrderBookUpdate += _ => HandleOrderBookUpdate();
-
-        _logger.LogInformation("Bybit adapter initialized for {Symbol}", _symbol);
+        _logger.LogInformation("Bybit best-bid-ask adapter initialized for {Symbol}", _symbol);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(_orderBook);
+        ArgumentNullException.ThrowIfNull(_socketClient);
+
+        _orderBook ??= new BybitSymbolOrderBook(
+            _symbol,
+            Category.Spot,
+            options =>
+            {
+                options.Limit = 1;
+            },
+            NullLoggerFactory.Instance,
+            _socketClient);
+
         var result = await _orderBook.StartAsync(cancellationToken);
-        if (!result.Success)
+        if (!result.Success || !result.Data)
         {
-            throw new InvalidOperationException($"Failed to start Bybit order book for {_symbol}: {result.Error}");
+            throw new InvalidOperationException($"Failed to start Bybit best-bid-ask stream for {_symbol}: {result.Error}");
         }
 
-        _logger.LogInformation("Bybit order book started for {Symbol}", _symbol);
+        CaptureTopOfBook();
+        _isConnected = true;
+        _logger.LogInformation("Bybit best-bid-ask stream started for {Symbol}", _symbol);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -113,37 +107,31 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
         {
             await _orderBook.StopAsync();
         }
+
+        _isConnected = false;
     }
 
     public ExchangeMarketSnapshot? GetSnapshot()
     {
-        if (_orderBook is null || Rules is null)
-        {
-            return null;
-        }
+        CaptureTopOfBook();
 
         var capturedAtUtc = DateTimeOffset.UtcNow;
-        var dataAgeByExchangeTimestamp = CalculateDataAge(capturedAtUtc, _orderBook.UpdateTime, _orderBook.UpdateServerTime, _orderBook.DataAge);
-        var dataAgeByLocalCallbackTimestamp = CalculateCallbackAge(capturedAtUtc, _lastUpdateCallbackUtc);
-        var timeSinceTopOfBookChanged = CalculateCallbackAge(capturedAtUtc, _lastTopOfBookChangeUtc);
+        var dataAge = _lastUpdateUtc.HasValue
+            ? capturedAtUtc - _lastUpdateUtc.Value
+            : TimeSpan.MaxValue;
 
         return new ExchangeMarketSnapshot(
-            ExchangeId.Bybit,
-            Rules,
-            new OrderBookSnapshot(
-                _symbol,
-                MapStatus(_orderBook.Status),
-                capturedAtUtc,
-                _orderBook.UpdateTime,
-                _orderBook.UpdateServerTime,
-                _lastUpdateCallbackUtc,
-                dataAgeByExchangeTimestamp,
-                dataAgeByExchangeTimestamp,
-                dataAgeByLocalCallbackTimestamp,
-                _lastTopOfBookChangeUtc,
-                timeSinceTopOfBookChanged,
-                _orderBook.Bids.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray(),
-                _orderBook.Asks.Take(_depth).Select(x => new OrderBookLevel(x.Price, x.Quantity)).ToArray()));
+            Exchange,
+            _symbol,
+            capturedAtUtc,
+            _bestBidPrice,
+            _bestBidQuantity,
+            _bestAskPrice,
+            _bestAskQuantity,
+            _lastUpdateUtc,
+            dataAge < TimeSpan.Zero ? TimeSpan.Zero : dataAge,
+            _isConnected,
+            _errorCount);
     }
 
     public void Dispose()
@@ -153,87 +141,33 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
         _restClient?.Dispose();
     }
 
-    private static ExchangeSymbolRules MapRules(BybitSpotSymbol symbol) =>
-        new(
-            ExchangeId.Bybit,
-            symbol.Name,
-            symbol.BaseAsset,
-            symbol.QuoteAsset,
-            symbol.LotSizeFilter?.BasePrecision ?? 0m,
-            symbol.LotSizeFilter?.MinOrderQuantity ?? 0m,
-            symbol.LotSizeFilter?.MaxOrderQuantity ?? decimal.MaxValue,
-            symbol.PriceFilter?.TickSize ?? 0m,
-            symbol.LotSizeFilter?.MinOrderValue ?? 0m,
-            symbol.LotSizeFilter?.BasePrecision,
-            symbol.LotSizeFilter?.QuotePrecision);
-
-    private static int ResolveSubscriptionDepth(int configuredDepth) =>
-        configuredDepth switch
-        {
-            <= 1 => 1,
-            <= 50 => 50,
-            <= 200 => 200,
-            _ => 1000
-        };
-
-    private static OrderBookSyncStatus MapStatus(OrderBookStatus status) =>
-        status switch
-        {
-            OrderBookStatus.Disconnected => OrderBookSyncStatus.Disconnected,
-            OrderBookStatus.Connecting => OrderBookSyncStatus.Connecting,
-            OrderBookStatus.Reconnecting => OrderBookSyncStatus.Reconnecting,
-            OrderBookStatus.Syncing => OrderBookSyncStatus.Syncing,
-            OrderBookStatus.Synced => OrderBookSyncStatus.Synced,
-            OrderBookStatus.Disposing => OrderBookSyncStatus.Disposing,
-            OrderBookStatus.Disposed => OrderBookSyncStatus.Disposed,
-            _ => OrderBookSyncStatus.Unknown
-        };
-
-    private static TimeSpan CalculateDataAge(
-        DateTimeOffset capturedAtUtc,
-        DateTimeOffset? updateTimeUtc,
-        DateTimeOffset? updateServerTimeUtc,
-        TimeSpan? fallbackDataAge)
+    private void CaptureTopOfBook()
     {
-        var updatedAtUtc = updateTimeUtc ?? updateServerTimeUtc;
-        if (updatedAtUtc.HasValue)
+        try
         {
-            var age = capturedAtUtc - updatedAtUtc.Value;
-            return age < TimeSpan.Zero ? TimeSpan.Zero : age;
+            if (_orderBook?.BestBid is not null)
+            {
+                _bestBidPrice = _orderBook.BestBid.Price;
+                _bestBidQuantity = _orderBook.BestBid.Quantity;
+            }
+
+            if (_orderBook?.BestAsk is not null)
+            {
+                _bestAskPrice = _orderBook.BestAsk.Price;
+                _bestAskQuantity = _orderBook.BestAsk.Quantity;
+            }
+
+            if (_orderBook?.UpdateLocalTime is not null)
+            {
+                _lastUpdateUtc = new DateTimeOffset(DateTime.SpecifyKind(_orderBook.UpdateLocalTime.Value, DateTimeKind.Utc));
+            }
+
+            _isConnected = (_orderBook?.BestBid is not null || _orderBook?.BestAsk is not null);
         }
-
-        return fallbackDataAge ?? TimeSpan.MaxValue;
-    }
-
-    private void HandleOrderBookUpdate()
-    {
-        _lastUpdateCallbackUtc = DateTimeOffset.UtcNow;
-
-        if (_orderBook is null)
+        catch (Exception ex)
         {
-            return;
+            _errorCount++;
+            _logger.LogError(ex, "Bybit quote update processing failed for {Symbol}", _symbol);
         }
-
-        var currentTopBid = _orderBook.Bids.FirstOrDefault();
-        var currentTopAsk = _orderBook.Asks.FirstOrDefault();
-        var mappedTopBid = currentTopBid is null ? null : new OrderBookLevel(currentTopBid.Price, currentTopBid.Quantity);
-        var mappedTopAsk = currentTopAsk is null ? null : new OrderBookLevel(currentTopAsk.Price, currentTopAsk.Quantity);
-        if (!Equals(_lastTopBid, mappedTopBid) || !Equals(_lastTopAsk, mappedTopAsk))
-        {
-            _lastTopBid = mappedTopBid;
-            _lastTopAsk = mappedTopAsk;
-            _lastTopOfBookChangeUtc = _lastUpdateCallbackUtc;
-        }
-    }
-
-    private static TimeSpan CalculateCallbackAge(DateTimeOffset capturedAtUtc, DateTimeOffset? timestampUtc)
-    {
-        if (!timestampUtc.HasValue)
-        {
-            return TimeSpan.MaxValue;
-        }
-
-        var age = capturedAtUtc - timestampUtc.Value;
-        return age < TimeSpan.Zero ? TimeSpan.Zero : age;
     }
 }

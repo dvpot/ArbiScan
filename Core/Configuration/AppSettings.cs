@@ -15,29 +15,17 @@ public sealed class AppSettings
 
     public RuntimeMode RuntimeMode { get; init; } = RuntimeMode.Mainnet;
 
-    [Range(1, 50)]
-    public int OrderBookDepth { get; init; } = 10;
-
     [Range(50, 10_000)]
     public int ScanIntervalMs { get; init; } = 250;
 
     [Range(1, 86_400_000)]
     public int QuoteStalenessThresholdMs { get; init; } = 2_000;
 
-    [Range(0, 86_400_000)]
-    public int QuoteStalenessConfirmationMs { get; init; } = 3_000;
-
-    [Range(1, 86_400_000)]
-    public int MinWindowLifetimeMs { get; init; } = 1_000;
-
-    [Range(1, 86_400_000)]
-    public int OrderBookSnapshotIntervalMs { get; init; } = 60_000;
-
     [Range(60, 86_400)]
     public int CumulativeSummaryIntervalSeconds { get; init; } = 3_600;
 
     [MinLength(1)]
-    public decimal[] TestNotionalsUsd { get; init; } = [10m, 20m, 50m];
+    public decimal[] TestNotionalsUsd { get; init; } = [100m];
 
     [Range(0, 1)]
     public decimal BinanceTakerFeeRate { get; init; } = 0.001m;
@@ -45,44 +33,23 @@ public sealed class AppSettings
     [Range(0, 1)]
     public decimal BybitTakerFeeRate { get; init; } = 0.001m;
 
-    [Required]
-    public BufferSettings Buffers { get; init; } = new();
+    [Range(0, 10_000)]
+    public decimal SafetyBufferBps { get; init; } = 2m;
 
-    [Required]
-    public ThresholdSettings Thresholds { get; init; } = new();
+    [Range(-1_000_000, 1_000_000)]
+    public decimal EntryThresholdUsd { get; init; } = 0m;
+
+    [Range(-10_000, 10_000)]
+    public decimal EntryThresholdBps { get; init; } = 0m;
 
     [Required]
     public StorageSettings Storage { get; init; } = new();
-
-    [Required]
-    public ReportSettings Reports { get; init; } = new();
 
     [Required]
     public ExchangeConnectionSettings Binance { get; init; } = new();
 
     [Required]
     public ExchangeConnectionSettings Bybit { get; init; } = new();
-}
-
-public sealed class BufferSettings
-{
-    [Range(0, 10_000)]
-    public decimal LatencyBufferBps { get; init; } = 3m;
-
-    [Range(0, 10_000)]
-    public decimal SlippageBufferBps { get; init; } = 5m;
-
-    [Range(0, 10_000)]
-    public decimal AdditionalSafetyBufferBps { get; init; } = 2m;
-}
-
-public sealed class ThresholdSettings
-{
-    [Range(-1_000_000, 1_000_000)]
-    public decimal EntryThresholdUsd { get; init; } = 0m;
-
-    [Range(-10_000, 10_000)]
-    public decimal EntryThresholdBps { get; init; } = 0m;
 }
 
 public sealed class StorageSettings
@@ -106,14 +73,6 @@ public sealed class StorageSettings
     public string DatabaseFileName { get; init; } = "arbiscan.sqlite";
 }
 
-public sealed class ReportSettings
-{
-    [Required]
-    public string MachineReadableFormat { get; init; } = "json";
-
-    public bool WriteJsonLinesExports { get; init; } = true;
-}
-
 public sealed class TelegramSettings
 {
     public bool Enabled { get; init; }
@@ -133,20 +92,10 @@ public sealed class TelegramSettings
     public bool NotifyOnCriticalError { get; init; } = true;
 
     public bool NotifyOnHealthStateChanges { get; init; } = true;
-
-    [Range(0, 86_400)]
-    public int HealthStateChangeMinNotifyIntervalSeconds { get; init; } = 60;
-
-    [Range(0, 86_400_000)]
-    public int RequireStableHealthyBeforeNotifyMs { get; init; } = 5_000;
-
-    [Range(0, 86_400_000)]
-    public int RequireStableDegradedBeforeNotifyMs { get; init; } = 5_000;
 }
 
 public sealed class ExchangeConnectionSettings
 {
-    public bool Enabled { get; init; } = true;
     public string? ApiKey { get; init; }
     public string? ApiSecret { get; init; }
 }

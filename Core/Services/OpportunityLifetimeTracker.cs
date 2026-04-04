@@ -1,4 +1,3 @@
-using ArbiScan.Core.Configuration;
 using ArbiScan.Core.Enums;
 using ArbiScan.Core.Models;
 
@@ -8,134 +7,77 @@ public sealed class OpportunityLifetimeTracker
 {
     private readonly Dictionary<string, ActiveOpportunityWindow> _activeWindows = new(StringComparer.Ordinal);
 
-    public OpportunityLifetimeTrackingResult Process(
-        string symbol,
-        OpportunityPairEvaluation evaluation,
-        AppSettings settings)
+    public IReadOnlyList<OpportunityWindowEvent> Process(RawSignalEvent signalEvent)
     {
-        var key = CreateKey(evaluation.Direction, evaluation.TestNotionalUsd);
-        var profitable = evaluation.Conservative.IsProfitable(
-            settings.Thresholds.EntryThresholdUsd,
-            settings.Thresholds.EntryThresholdBps);
+        var key = CreateKey(signalEvent.Direction, signalEvent.TestNotionalUsd);
+        var isPositive = signalEvent.SignalClass != SignalClass.NonPositive;
 
-        if (profitable)
+        if (isPositive)
         {
-            if (_activeWindows.TryGetValue(key, out var existing))
+            if (_activeWindows.TryGetValue(key, out var active))
             {
-                existing.LatestEvaluation = evaluation;
-                if (evaluation.Conservative.NetPnlUsd > existing.PeakEvaluation.Conservative.NetPnlUsd)
+                active.MaxGrossSpreadUsd = Math.Max(active.MaxGrossSpreadUsd, signalEvent.GrossSpreadUsd);
+                active.MaxNetEdgeUsd = Math.Max(active.MaxNetEdgeUsd, signalEvent.NetEdgeUsd);
+                active.NetEdgeSumUsd += signalEvent.NetEdgeUsd;
+                active.ObservationCount++;
+                if ((int)signalEvent.SignalClass > (int)active.StrongestSignalClass)
                 {
-                    existing.PeakEvaluation = evaluation;
+                    active.StrongestSignalClass = signalEvent.SignalClass;
                 }
 
-                return new OpportunityLifetimeTrackingResult([], false);
+                return [];
             }
 
             _activeWindows[key] = new ActiveOpportunityWindow
             {
-                WindowId = $"{evaluation.Direction}:{evaluation.TestNotionalUsd}:{evaluation.TimestampUtc.ToUnixTimeMilliseconds()}",
-                Direction = evaluation.Direction,
-                TestNotionalUsd = evaluation.TestNotionalUsd,
-                StartedAtUtc = evaluation.TimestampUtc,
-                OpeningEvaluation = evaluation,
-                LatestEvaluation = evaluation,
-                PeakEvaluation = evaluation
+                WindowId = Guid.NewGuid().ToString("N"),
+                Symbol = signalEvent.Symbol,
+                Direction = signalEvent.Direction,
+                TestNotionalUsd = signalEvent.TestNotionalUsd,
+                StartedAtUtc = signalEvent.TimestampUtc,
+                MaxGrossSpreadUsd = signalEvent.GrossSpreadUsd,
+                MaxNetEdgeUsd = signalEvent.NetEdgeUsd,
+                NetEdgeSumUsd = signalEvent.NetEdgeUsd,
+                ObservationCount = 1,
+                StrongestSignalClass = signalEvent.SignalClass
             };
 
-            return new OpportunityLifetimeTrackingResult([], false);
+            return [];
         }
 
-        if (!_activeWindows.Remove(key, out var closed))
+        if (!_activeWindows.Remove(key, out var closedWindow))
         {
-            return new OpportunityLifetimeTrackingResult([], false);
+            return [];
         }
 
-        var lifetimeMs = closed.LifetimeMs(evaluation.TimestampUtc);
-        if (lifetimeMs < settings.MinWindowLifetimeMs)
-        {
-            return new OpportunityLifetimeTrackingResult([], true);
-        }
-
-        var peak = closed.PeakEvaluation;
-        return new OpportunityLifetimeTrackingResult(
-        [
-            new OpportunityWindowEvent(
-                closed.WindowId,
-                closed.StartedAtUtc,
-                evaluation.TimestampUtc,
-                lifetimeMs,
-                symbol,
-                peak.Direction,
-                peak.Direction.BuyExchange().ToString(),
-                peak.Direction.SellExchange().ToString(),
-                peak.TestNotionalUsd,
-                peak.Conservative.FillabilityStatus,
-                peak.Conservative.ExecutableQuantity,
-                peak.Conservative.FillableBaseQuantity,
-                peak.BinanceBestBid,
-                peak.BinanceBestAsk,
-                peak.BybitBestBid,
-                peak.BybitBestAsk,
-                peak.Conservative.GrossPnlUsd,
-                peak.Optimistic.NetPnlUsd,
-                peak.Conservative.NetPnlUsd,
-                peak.Conservative.GrossEdgePct,
-                peak.Optimistic.NetEdgePct,
-                peak.Conservative.NetEdgePct,
-                peak.Conservative.FeesTotalUsd,
-                peak.Conservative.BuffersTotalUsd,
-                peak.HealthFlags,
-                peak.Conservative.RejectReason)
-        ],
-        false);
+        return [ToWindowEvent(closedWindow, signalEvent.TimestampUtc)];
     }
 
-    public IReadOnlyList<OpportunityWindowEvent> Flush(string symbol, DateTimeOffset closedAtUtc, AppSettings settings)
+    public IReadOnlyList<OpportunityWindowEvent> FlushAll(DateTimeOffset timestampUtc)
     {
-        var events = new List<OpportunityWindowEvent>();
-
-        foreach (var active in _activeWindows.Values)
-        {
-            var lifetimeMs = active.LifetimeMs(closedAtUtc);
-            if (lifetimeMs < settings.MinWindowLifetimeMs)
-            {
-                continue;
-            }
-
-            var peak = active.PeakEvaluation;
-            events.Add(new OpportunityWindowEvent(
-                active.WindowId,
-                active.StartedAtUtc,
-                closedAtUtc,
-                lifetimeMs,
-                symbol,
-                peak.Direction,
-                peak.Direction.BuyExchange().ToString(),
-                peak.Direction.SellExchange().ToString(),
-                peak.TestNotionalUsd,
-                peak.Conservative.FillabilityStatus,
-                peak.Conservative.ExecutableQuantity,
-                peak.Conservative.FillableBaseQuantity,
-                peak.BinanceBestBid,
-                peak.BinanceBestAsk,
-                peak.BybitBestBid,
-                peak.BybitBestAsk,
-                peak.Conservative.GrossPnlUsd,
-                peak.Optimistic.NetPnlUsd,
-                peak.Conservative.NetPnlUsd,
-                peak.Conservative.GrossEdgePct,
-                peak.Optimistic.NetEdgePct,
-                peak.Conservative.NetEdgePct,
-                peak.Conservative.FeesTotalUsd,
-                peak.Conservative.BuffersTotalUsd,
-                peak.HealthFlags,
-                "Window flushed during shutdown"));
-        }
+        var windows = _activeWindows.Values
+            .Select(x => ToWindowEvent(x, timestampUtc))
+            .ToArray();
 
         _activeWindows.Clear();
-        return events;
+        return windows;
     }
 
+    private static OpportunityWindowEvent ToWindowEvent(ActiveOpportunityWindow active, DateTimeOffset closedAtUtc) =>
+        new(
+            active.WindowId,
+            active.Symbol,
+            active.Direction,
+            active.TestNotionalUsd,
+            active.StartedAtUtc,
+            closedAtUtc,
+            active.LifetimeMs(closedAtUtc),
+            active.MaxGrossSpreadUsd,
+            active.MaxNetEdgeUsd,
+            active.ObservationCount == 0 ? 0m : active.NetEdgeSumUsd / active.ObservationCount,
+            active.ObservationCount,
+            active.StrongestSignalClass);
+
     private static string CreateKey(ArbitrageDirection direction, decimal notionalUsd) =>
-        $"{direction}:{notionalUsd}";
+        $"{direction}:{notionalUsd:0.########}";
 }

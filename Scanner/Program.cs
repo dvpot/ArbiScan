@@ -14,6 +14,8 @@ using Microsoft.Extensions.Logging;
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Configuration.AddEnvironmentVariables();
+builder.Configuration.AddJsonFile("config/appsettings.example.json", optional: true, reloadOnChange: false);
+builder.Configuration.AddJsonFile("config/telegramsettings.example.json", optional: true, reloadOnChange: false);
 var provisionalStorageRoot = builder.Configuration["ArbiScan:Storage:RootPath"] ?? "/app/storage";
 builder.Configuration.AddJsonFile(Path.Combine(provisionalStorageRoot, "config", "appsettings.json"), optional: true, reloadOnChange: true);
 builder.Configuration.AddJsonFile(Path.Combine(provisionalStorageRoot, "config", "telegramsettings.json"), optional: true, reloadOnChange: true);
@@ -39,8 +41,7 @@ builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton(telegramSettings);
 builder.Services.AddSingleton(storagePaths);
 builder.Services.AddSingleton<IFeeCalculator>(_ => new FeeCalculator(settings.BinanceTakerFeeRate, settings.BybitTakerFeeRate));
-builder.Services.AddSingleton<IFillableSizeCalculator, FillableSizeCalculator>();
-builder.Services.AddSingleton<IOpportunityDetector, OpportunityDetector>();
+builder.Services.AddSingleton<SignalCalculator>();
 builder.Services.AddSingleton<ISummaryGenerator, SummaryGenerator>();
 builder.Services.AddSingleton<IHealthReportGenerator, HealthReportGenerator>();
 builder.Services.AddSingleton<OpportunityLifetimeTracker>();
@@ -52,18 +53,14 @@ builder.Services.AddSingleton<ITelegramNotifier>(sp =>
         : new NullTelegramNotifier());
 builder.Services.AddSingleton(sp => new BinanceSpotExchangeAdapter(
     settings.Symbol,
-    settings.OrderBookDepth,
     settings.RuntimeMode,
     settings.Binance,
-    sp.GetRequiredService<ILogger<BinanceSpotExchangeAdapter>>(),
-    sp.GetRequiredService<ILoggerFactory>()));
+    sp.GetRequiredService<ILogger<BinanceSpotExchangeAdapter>>()));
 builder.Services.AddSingleton(sp => new BybitSpotExchangeAdapter(
     settings.Symbol,
-    settings.OrderBookDepth,
     settings.RuntimeMode,
     settings.Bybit,
-    sp.GetRequiredService<ILogger<BybitSpotExchangeAdapter>>(),
-    sp.GetRequiredService<ILoggerFactory>()));
+    sp.GetRequiredService<ILogger<BybitSpotExchangeAdapter>>()));
 builder.Services.AddHostedService<ScannerWorker>();
 
 var host = builder.Build();

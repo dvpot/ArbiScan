@@ -4,12 +4,20 @@ namespace ArbiScan.Core.Models;
 
 public sealed record ExchangeMarketSnapshot(
     ExchangeId Exchange,
-    ExchangeSymbolRules Rules,
-    OrderBookSnapshot OrderBook)
+    string Symbol,
+    DateTimeOffset CapturedAtUtc,
+    decimal? BestBidPrice,
+    decimal? BestBidQuantity,
+    decimal? BestAskPrice,
+    decimal? BestAskQuantity,
+    DateTimeOffset? LastUpdateUtc,
+    TimeSpan DataAge,
+    bool IsConnected,
+    int ErrorCount)
 {
-    public bool IsHealthy(TimeSpan maxAge) =>
-        OrderBook.Status == OrderBookSyncStatus.Synced &&
-        OrderBook.DataAge <= maxAge &&
-        OrderBook.BestBid is not null &&
-        OrderBook.BestAsk is not null;
+    public bool HasQuote =>
+        BestBidPrice.HasValue &&
+        BestAskPrice.HasValue &&
+        BestBidPrice.Value > 0m &&
+        BestAskPrice.Value > 0m;
 }

@@ -121,6 +121,13 @@ jobs:
           script: |
             set -euo pipefail
             cd "${{ secrets.ARBISCAN_VPS_APP_DIR }}"
+            if [[ -f .env ]]; then
+              set -a
+              source ./.env
+              set +a
+            fi
+            storage_root="${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}"
+            mkdir -p "${storage_root}/config" "${storage_root}/logs" "${storage_root}/data" "${storage_root}/reports"
             existing_container_id="$(docker ps -aq -f name=^arbiscan$ || true)"
             if [[ -n "${existing_container_id}" ]]; then
               docker rm -f arbiscan || true

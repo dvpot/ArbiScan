@@ -2,18 +2,15 @@ using ArbiScan.Core.Enums;
 
 namespace ArbiScan.Core.Models;
 
-public sealed record OpportunityEvaluation(
+public sealed record RawSignalEvent(
     DateTimeOffset TimestampUtc,
     string Symbol,
     ArbitrageDirection Direction,
-    ExchangeId BuyExchange,
-    ExchangeId SellExchange,
     decimal TestNotionalUsd,
-    decimal BuyPrice,
-    decimal SellPrice,
-    decimal BaseQuantity,
-    decimal BuyCostUsd,
-    decimal SellProceedsUsd,
+    decimal BinanceBestBid,
+    decimal BinanceBestAsk,
+    decimal BybitBestBid,
+    decimal BybitBestAsk,
     decimal GrossSpreadUsd,
     decimal GrossSpreadBps,
     decimal BuyFeeUsd,
@@ -25,5 +22,4 @@ public sealed record OpportunityEvaluation(
     decimal ExpectedNetPnlUsd,
     decimal ExpectedNetPnlPct,
     SignalClass SignalClass,
-    DataHealthFlags HealthFlags,
-    bool IsQuoteUsable);
+    DataHealthFlags HealthFlags);

@@ -7,7 +7,7 @@ if [[ $# -lt 1 || $# -gt 3 ]]; then
 fi
 
 analysis_date="$1"
-storage_root="${2:-/srv/ArbiScan}"
+storage_root="${2:-/srv/arbiscan-v2}"
 output_root="${3:-$(pwd)/analysis-bundles}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 bundle_name="arbiscan-analysis-${analysis_date}-${timestamp}"
@@ -68,10 +68,7 @@ redact_json() {
 
 copy_matching_files "${logs_root}" "application-*.log"
 copy_if_exists "${reports_root}/health-events-${analysis_date}.jsonl" "health-events-${analysis_date}.jsonl"
-copy_if_exists "${reports_root}/orderbook-snapshots-${analysis_date}.jsonl" "orderbook-snapshots-${analysis_date}.jsonl"
-copy_if_exists "${reports_root}/stale-diagnostics-${analysis_date}.jsonl" "stale-diagnostics-${analysis_date}.jsonl"
-copy_if_exists "${reports_root}/rejected-positive-signals-${analysis_date}.jsonl" "rejected-positive-signals-${analysis_date}.jsonl"
-copy_if_exists "${reports_root}/candidate-rejections-${analysis_date}.jsonl" "candidate-rejections-${analysis_date}.jsonl"
+copy_if_exists "${reports_root}/raw-signal-events-${analysis_date}.jsonl" "raw-signal-events-${analysis_date}.jsonl"
 
 if [[ -f "${reports_root}/window-events-${analysis_date}.jsonl" ]]; then
   cp "${reports_root}/window-events-${analysis_date}.jsonl" "${bundle_dir}/window-events-${analysis_date}.jsonl"
@@ -86,9 +83,6 @@ copy_matching_files "${reports_root}" "cumulative-*.json"
 copy_matching_files "${reports_root}" "health-hourly-*.json"
 copy_matching_files "${reports_root}" "health-daily-*.json"
 copy_matching_files "${reports_root}" "health-cumulative-*.json"
-copy_matching_files "${reports_root}" "fillability-diagnostics-hourly-*.json"
-copy_matching_files "${reports_root}" "fillability-diagnostics-daily-*.json"
-copy_matching_files "${reports_root}" "fillability-diagnostics-cumulative-*.json"
 
 redact_json "${config_root}/appsettings.json" "production-appsettings.redacted.json"
 redact_json "${config_root}/telegramsettings.json" "telegramsettings.redacted.json"
@@ -96,18 +90,18 @@ redact_json "${config_root}/telegramsettings.json" "telegramsettings.redacted.js
 log_source="${logs_root}/application-${analysis_date}.log"
 if [[ -f "${log_source}" ]]; then
   if command -v rg >/dev/null 2>&1; then
-    rg -n "BybitStale|Stale transition|stale_detected|stale_recovered|data age threshold crossed|Reconnecting|Resync|OverallHealthChanged|StaleQuotes|Telegram notification error" "${log_source}" \
-      > "${bundle_dir}/stale-diagnostics-excerpts.txt" || true
+    rg -n "started|stale|recovered|critical error|heartbeat|Telegram notification error" "${log_source}" \
+      > "${bundle_dir}/health-excerpts.txt" || true
   else
-    grep -nE "BybitStale|Stale transition|stale_detected|stale_recovered|data age threshold crossed|Reconnecting|Resync|OverallHealthChanged|StaleQuotes|Telegram notification error" "${log_source}" \
-      > "${bundle_dir}/stale-diagnostics-excerpts.txt" || true
+    grep -nE "started|stale|recovered|critical error|heartbeat|Telegram notification error" "${log_source}" \
+      > "${bundle_dir}/health-excerpts.txt" || true
   fi
 else
   echo "missing: ${log_source}" >> "${bundle_dir}/missing-files.txt"
 fi
 
 git_sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-app_version="$(git rev-list --count HEAD 2>/dev/null | awk '{print "1.0." $1}' || echo unknown)"
+app_version="$(git rev-list --count HEAD 2>/dev/null | awk '{print "2.0." $1}' || echo unknown)"
 collection_time_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 container_id="$(docker ps --filter "name=^arbiscan$" --format '{{.ID}}' 2>/dev/null | head -n 1 || true)"
 container_started_at="unknown"
@@ -153,18 +147,14 @@ generated_utc=${timestamp}
 Included when available:
 - application-*.log
 - health-events jsonl
-- orderbook-snapshots jsonl
-- stale-diagnostics jsonl
-- rejected-positive-signals jsonl
-- candidate-rejections jsonl
+- raw-signal-events jsonl
 - window-events jsonl or explicit missing marker
 - hourly/daily/cumulative summaries
 - health-hourly/health-daily/health-cumulative reports
-- fillability-diagnostics-hourly/daily/cumulative reports
 - redacted production appsettings
 - redacted telegramsettings
 - runtime-meta.json
-- stale diagnostics excerpts
+- health excerpts
 EOF
 
 tar -czf "${output_root}/${bundle_name}.tar.gz" -C "${output_root}" "${bundle_name}"

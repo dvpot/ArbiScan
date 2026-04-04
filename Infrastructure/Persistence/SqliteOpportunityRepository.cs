@@ -1,7 +1,6 @@
-using System.Data;
 using System.Text.Json;
-using ArbiScan.Core.Models;
 using ArbiScan.Core.Interfaces;
+using ArbiScan.Core.Models;
 using Microsoft.Data.Sqlite;
 
 namespace ArbiScan.Infrastructure.Persistence;
@@ -10,7 +9,7 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true
+        WriteIndented = false
     };
 
     private readonly string _connectionString;
@@ -31,17 +30,14 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         var command = connection.CreateCommand();
         command.CommandText =
             """
-            CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+            CREATE TABLE IF NOT EXISTS raw_signal_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_utc TEXT NOT NULL,
-                exchange_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
-                status INTEGER NOT NULL,
-                data_age_ms INTEGER NOT NULL,
-                best_bid_price REAL NULL,
-                best_bid_quantity REAL NULL,
-                best_ask_price REAL NULL,
-                best_ask_quantity REAL NULL,
+                direction INTEGER NOT NULL,
+                test_notional_usd REAL NOT NULL,
+                signal_class INTEGER NOT NULL,
+                net_edge_usd REAL NOT NULL,
                 payload_json TEXT NOT NULL
             );
 
@@ -58,34 +54,26 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
             CREATE TABLE IF NOT EXISTS window_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 window_id TEXT NOT NULL,
-                opened_at_utc TEXT NOT NULL,
-                closed_at_utc TEXT NOT NULL,
-                lifetime_ms INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
                 direction INTEGER NOT NULL,
-                buy_exchange TEXT NOT NULL,
-                sell_exchange TEXT NOT NULL,
                 test_notional_usd REAL NOT NULL,
-                fillability_status INTEGER NOT NULL,
-                executable_quantity REAL NOT NULL,
-                fillable_base_quantity REAL NOT NULL,
-                binance_best_bid REAL NOT NULL,
-                binance_best_ask REAL NOT NULL,
-                bybit_best_bid REAL NOT NULL,
-                bybit_best_ask REAL NOT NULL,
-                gross_pnl_usd REAL NOT NULL,
-                optimistic_net_pnl_usd REAL NOT NULL,
-                conservative_net_pnl_usd REAL NOT NULL,
-                gross_edge_pct REAL NOT NULL,
-                optimistic_net_edge_pct REAL NOT NULL,
-                conservative_net_edge_pct REAL NOT NULL,
-                fees_total_usd REAL NOT NULL,
-                buffers_total_usd REAL NOT NULL,
-                health_flags INTEGER NOT NULL,
-                notes TEXT NULL
+                opened_at_utc TEXT NOT NULL,
+                closed_at_utc TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                payload_json TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS summary_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                generated_at_utc TEXT NOT NULL,
+                period INTEGER NOT NULL,
+                from_utc TEXT NOT NULL,
+                to_utc TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS health_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 generated_at_utc TEXT NOT NULL,
                 period INTEGER NOT NULL,
@@ -99,30 +87,26 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task SaveOrderBookSnapshotAsync(OrderBookSnapshotRecord snapshot, CancellationToken cancellationToken)
+    public async Task SaveRawSignalEventAsync(RawSignalEvent signalEvent, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO orderbook_snapshots (
-                timestamp_utc, exchange_id, symbol, status, data_age_ms, best_bid_price, best_bid_quantity, best_ask_price, best_ask_quantity, payload_json
-            )
-            VALUES (
-                $timestamp_utc, $exchange_id, $symbol, $status, $data_age_ms, $best_bid_price, $best_bid_quantity, $best_ask_price, $best_ask_quantity, $payload_json
+            INSERT INTO raw_signal_events (
+                timestamp_utc, symbol, direction, test_notional_usd, signal_class, net_edge_usd, payload_json
+            ) VALUES (
+                $timestamp_utc, $symbol, $direction, $test_notional_usd, $signal_class, $net_edge_usd, $payload_json
             );
             """;
 
-        command.Parameters.AddWithValue("$timestamp_utc", snapshot.TimestampUtc.ToString("O"));
-        command.Parameters.AddWithValue("$exchange_id", (int)snapshot.Exchange);
-        command.Parameters.AddWithValue("$symbol", snapshot.Symbol);
-        command.Parameters.AddWithValue("$status", (int)snapshot.Status);
-        command.Parameters.AddWithValue("$data_age_ms", (long)snapshot.DataAge.TotalMilliseconds);
-        command.Parameters.AddWithValue("$best_bid_price", (object?)snapshot.BestBidPrice ?? DBNull.Value);
-        command.Parameters.AddWithValue("$best_bid_quantity", (object?)snapshot.BestBidQuantity ?? DBNull.Value);
-        command.Parameters.AddWithValue("$best_ask_price", (object?)snapshot.BestAskPrice ?? DBNull.Value);
-        command.Parameters.AddWithValue("$best_ask_quantity", (object?)snapshot.BestAskQuantity ?? DBNull.Value);
-        command.Parameters.AddWithValue("$payload_json", snapshot.PayloadJson);
+        command.Parameters.AddWithValue("$timestamp_utc", signalEvent.TimestampUtc.ToString("O"));
+        command.Parameters.AddWithValue("$symbol", signalEvent.Symbol);
+        command.Parameters.AddWithValue("$direction", (int)signalEvent.Direction);
+        command.Parameters.AddWithValue("$test_notional_usd", signalEvent.TestNotionalUsd);
+        command.Parameters.AddWithValue("$signal_class", (int)signalEvent.SignalClass);
+        command.Parameters.AddWithValue("$net_edge_usd", signalEvent.NetEdgeUsd);
+        command.Parameters.AddWithValue("$payload_json", JsonSerializer.Serialize(signalEvent, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -134,8 +118,7 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
             """
             INSERT INTO health_events (
                 timestamp_utc, event_type, exchange_id, flags, is_healthy_after_event, message
-            )
-            VALUES (
+            ) VALUES (
                 $timestamp_utc, $event_type, $exchange_id, $flags, $is_healthy_after_event, $message
             );
             """;
@@ -156,45 +139,20 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         command.CommandText =
             """
             INSERT INTO window_events (
-                window_id, opened_at_utc, closed_at_utc, lifetime_ms, symbol, direction, buy_exchange, sell_exchange, test_notional_usd,
-                fillability_status, executable_quantity, fillable_base_quantity, binance_best_bid, binance_best_ask, bybit_best_bid, bybit_best_ask,
-                gross_pnl_usd, optimistic_net_pnl_usd, conservative_net_pnl_usd, gross_edge_pct, optimistic_net_edge_pct, conservative_net_edge_pct,
-                fees_total_usd, buffers_total_usd, health_flags, notes
-            )
-            VALUES (
-                $window_id, $opened_at_utc, $closed_at_utc, $lifetime_ms, $symbol, $direction, $buy_exchange, $sell_exchange, $test_notional_usd,
-                $fillability_status, $executable_quantity, $fillable_base_quantity, $binance_best_bid, $binance_best_ask, $bybit_best_bid, $bybit_best_ask,
-                $gross_pnl_usd, $optimistic_net_pnl_usd, $conservative_net_pnl_usd, $gross_edge_pct, $optimistic_net_edge_pct, $conservative_net_edge_pct,
-                $fees_total_usd, $buffers_total_usd, $health_flags, $notes
+                window_id, symbol, direction, test_notional_usd, opened_at_utc, closed_at_utc, duration_ms, payload_json
+            ) VALUES (
+                $window_id, $symbol, $direction, $test_notional_usd, $opened_at_utc, $closed_at_utc, $duration_ms, $payload_json
             );
             """;
 
         command.Parameters.AddWithValue("$window_id", windowEvent.WindowId);
-        command.Parameters.AddWithValue("$opened_at_utc", windowEvent.OpenedAtUtc.ToString("O"));
-        command.Parameters.AddWithValue("$closed_at_utc", windowEvent.ClosedAtUtc.ToString("O"));
-        command.Parameters.AddWithValue("$lifetime_ms", windowEvent.LifetimeMs);
         command.Parameters.AddWithValue("$symbol", windowEvent.Symbol);
         command.Parameters.AddWithValue("$direction", (int)windowEvent.Direction);
-        command.Parameters.AddWithValue("$buy_exchange", windowEvent.BuyExchange);
-        command.Parameters.AddWithValue("$sell_exchange", windowEvent.SellExchange);
         command.Parameters.AddWithValue("$test_notional_usd", windowEvent.TestNotionalUsd);
-        command.Parameters.AddWithValue("$fillability_status", (int)windowEvent.FillabilityStatus);
-        command.Parameters.AddWithValue("$executable_quantity", windowEvent.ExecutableQuantity);
-        command.Parameters.AddWithValue("$fillable_base_quantity", windowEvent.FillableBaseQuantity);
-        command.Parameters.AddWithValue("$binance_best_bid", windowEvent.BinanceBestBid);
-        command.Parameters.AddWithValue("$binance_best_ask", windowEvent.BinanceBestAsk);
-        command.Parameters.AddWithValue("$bybit_best_bid", windowEvent.BybitBestBid);
-        command.Parameters.AddWithValue("$bybit_best_ask", windowEvent.BybitBestAsk);
-        command.Parameters.AddWithValue("$gross_pnl_usd", windowEvent.GrossPnlUsd);
-        command.Parameters.AddWithValue("$optimistic_net_pnl_usd", windowEvent.OptimisticNetPnlUsd);
-        command.Parameters.AddWithValue("$conservative_net_pnl_usd", windowEvent.ConservativeNetPnlUsd);
-        command.Parameters.AddWithValue("$gross_edge_pct", windowEvent.GrossEdgePct);
-        command.Parameters.AddWithValue("$optimistic_net_edge_pct", windowEvent.OptimisticNetEdgePct);
-        command.Parameters.AddWithValue("$conservative_net_edge_pct", windowEvent.ConservativeNetEdgePct);
-        command.Parameters.AddWithValue("$fees_total_usd", windowEvent.FeesTotalUsd);
-        command.Parameters.AddWithValue("$buffers_total_usd", windowEvent.BuffersTotalUsd);
-        command.Parameters.AddWithValue("$health_flags", (int)windowEvent.HealthFlags);
-        command.Parameters.AddWithValue("$notes", (object?)windowEvent.Notes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$opened_at_utc", windowEvent.OpenedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$closed_at_utc", windowEvent.ClosedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$duration_ms", windowEvent.DurationMs);
+        command.Parameters.AddWithValue("$payload_json", JsonSerializer.Serialize(windowEvent, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -206,8 +164,7 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
             """
             INSERT INTO summary_reports (
                 generated_at_utc, period, from_utc, to_utc, symbol, payload_json
-            )
-            VALUES (
+            ) VALUES (
                 $generated_at_utc, $period, $from_utc, $to_utc, $symbol, $payload_json
             );
             """;
@@ -221,17 +178,64 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task SaveHealthReportAsync(HealthReport report, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO health_reports (
+                generated_at_utc, period, from_utc, to_utc, symbol, payload_json
+            ) VALUES (
+                $generated_at_utc, $period, $from_utc, $to_utc, $symbol, $payload_json
+            );
+            """;
+
+        command.Parameters.AddWithValue("$generated_at_utc", report.GeneratedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$period", (int)report.Period);
+        command.Parameters.AddWithValue("$from_utc", report.FromUtc.ToString("O"));
+        command.Parameters.AddWithValue("$to_utc", report.ToUtc.ToString("O"));
+        command.Parameters.AddWithValue("$symbol", report.Symbol);
+        command.Parameters.AddWithValue("$payload_json", JsonSerializer.Serialize(report, JsonOptions));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RawSignalEvent>> GetRawSignalEventsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT payload_json
+            FROM raw_signal_events
+            WHERE timestamp_utc >= $from_utc AND timestamp_utc <= $to_utc
+            ORDER BY timestamp_utc;
+            """;
+
+        command.Parameters.AddWithValue("$from_utc", fromUtc.ToString("O"));
+        command.Parameters.AddWithValue("$to_utc", toUtc.ToString("O"));
+
+        var results = new List<RawSignalEvent>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var payload = JsonSerializer.Deserialize<RawSignalEvent>(reader.GetString(0), JsonOptions);
+            if (payload is not null)
+            {
+                results.Add(payload);
+            }
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<OpportunityWindowEvent>> GetWindowEventsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT
-                window_id, opened_at_utc, closed_at_utc, lifetime_ms, symbol, direction, buy_exchange, sell_exchange, test_notional_usd,
-                fillability_status, executable_quantity, fillable_base_quantity, binance_best_bid, binance_best_ask, bybit_best_bid, bybit_best_ask,
-                gross_pnl_usd, optimistic_net_pnl_usd, conservative_net_pnl_usd, gross_edge_pct, optimistic_net_edge_pct, conservative_net_edge_pct,
-                fees_total_usd, buffers_total_usd, health_flags, notes
+            SELECT payload_json
             FROM window_events
             WHERE opened_at_utc >= $from_utc AND closed_at_utc <= $to_utc
             ORDER BY opened_at_utc;
@@ -244,33 +248,11 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            results.Add(new OpportunityWindowEvent(
-                reader.GetString(0),
-                DateTimeOffset.Parse(reader.GetString(1)),
-                DateTimeOffset.Parse(reader.GetString(2)),
-                reader.GetInt64(3),
-                reader.GetString(4),
-                (ArbiScan.Core.Enums.ArbitrageDirection)reader.GetInt32(5),
-                reader.GetString(6),
-                reader.GetString(7),
-                reader.GetDecimal(8),
-                (ArbiScan.Core.Enums.FillabilityStatus)reader.GetInt32(9),
-                reader.GetDecimal(10),
-                reader.GetDecimal(11),
-                reader.GetDecimal(12),
-                reader.GetDecimal(13),
-                reader.GetDecimal(14),
-                reader.GetDecimal(15),
-                reader.GetDecimal(16),
-                reader.GetDecimal(17),
-                reader.GetDecimal(18),
-                reader.GetDecimal(19),
-                reader.GetDecimal(20),
-                reader.GetDecimal(21),
-                reader.GetDecimal(22),
-                reader.GetDecimal(23),
-                (ArbiScan.Core.Enums.DataHealthFlags)reader.GetInt32(24),
-                reader.IsDBNull(25) ? null : reader.GetString(25)));
+            var payload = JsonSerializer.Deserialize<OpportunityWindowEvent>(reader.GetString(0), JsonOptions);
+            if (payload is not null)
+            {
+                results.Add(payload);
+            }
         }
 
         return results;
@@ -311,10 +293,6 @@ public sealed class SqliteOpportunityRepository : IOpportunityRepository
     {
         var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-
-        await using var pragma = connection.CreateCommand();
-        pragma.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;";
-        await pragma.ExecuteNonQueryAsync(cancellationToken);
         return connection;
     }
 }

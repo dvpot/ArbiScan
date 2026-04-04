@@ -12,7 +12,7 @@ services:
       ArbiScan__Bybit__ApiSecret: ${ARBISCAN_BYBIT_API_SECRET:-}
       TelegramBot__BotToken: ${TELEGRAM_BOT_TOKEN:-}
     volumes:
-      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/config:/app/storage/config
-      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/logs:/app/storage/logs
-      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/data:/app/storage/data
-      - ${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}/reports:/app/storage/reports
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}/config:/app/storage/config
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}/logs:/app/storage/logs
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}/data:/app/storage/data
+      - ${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}/reports:/app/storage/reports

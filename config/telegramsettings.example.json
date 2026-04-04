@@ -7,9 +7,6 @@
     "NotifyOnStartup": true,
     "NotifyOnShutdown": true,
     "NotifyOnCriticalError": true,
-    "NotifyOnHealthStateChanges": true,
-    "HealthStateChangeMinNotifyIntervalSeconds": 60,
-    "RequireStableHealthyBeforeNotifyMs": 5000,
-    "RequireStableDegradedBeforeNotifyMs": 5000
+    "NotifyOnHealthStateChanges": true
   }
 }
