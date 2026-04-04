@@ -7,6 +7,7 @@ public interface IReportExporter
     Task ExportOrderBookSnapshotAsync(OrderBookSnapshotRecord snapshot, CancellationToken cancellationToken);
     Task ExportHealthEventAsync(HealthEvent healthEvent, CancellationToken cancellationToken);
     Task ExportHealthReportAsync(HealthReport report, CancellationToken cancellationToken);
+    Task ExportCandidateRejectionAsync(CandidateRejectionEvent rejectionEvent, CancellationToken cancellationToken);
     Task ExportRejectedPositiveSignalAsync(RejectedPositiveSignalEvent signalEvent, CancellationToken cancellationToken);
     Task ExportStaleDiagnosticAsync(StaleDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken);
     Task ExportWindowEventAsync(OpportunityWindowEvent windowEvent, CancellationToken cancellationToken);

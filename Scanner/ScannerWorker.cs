@@ -16,6 +16,7 @@ namespace ArbiScan.Scanner;
 public sealed class ScannerWorker : BackgroundService
 {
     private const double QuietMarketEmergencyThresholdMultiplier = 3d;
+    private const int CandidateRejectionSamplesPerHourPerPrimaryReason = 20;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -43,6 +44,7 @@ public sealed class ScannerWorker : BackgroundService
     private readonly Dictionary<ExchangeId, int> _reconnectCountByExchange = new();
     private readonly Dictionary<ExchangeId, int> _resyncCountByExchange = new();
     private readonly Dictionary<ExchangeId, int> _staleCountByExchange = new();
+    private readonly Dictionary<string, int> _candidateRejectionSampleCounters = new(StringComparer.Ordinal);
     private DataHealthFlags _previousHealthFlags = DataHealthFlags.None;
     private bool _previousHealthy = true;
     private bool _lastNotifiedHealthy = true;
@@ -134,6 +136,12 @@ public sealed class ScannerWorker : BackgroundService
                             var rejectedSignal = BuildRejectedPositiveSignalEvent(marketSnapshot, evaluation, telemetry);
                             _runtimeTelemetry.RecordRejectedPositiveSignal(rejectedSignal);
                             await _exporter.ExportRejectedPositiveSignalAsync(rejectedSignal, stoppingToken);
+
+                            if (ShouldExportCandidateRejectionSample(telemetry))
+                            {
+                                var candidateRejection = BuildCandidateRejectionEvent(telemetry);
+                                await _exporter.ExportCandidateRejectionAsync(candidateRejection, stoppingToken);
+                            }
                         }
 
                         foreach (var window in trackingResult.ClosedWindows)
@@ -722,6 +730,7 @@ public sealed class ScannerWorker : BackgroundService
         var buyCostUsd = conservative.BuyLeg?.GrossQuoteAmountUsd ?? 0m;
         var netBeforeFeesUsd = conservative.GrossPnlUsd - conservative.BuffersTotalUsd;
         var netEdgeBeforeFeesPct = buyCostUsd > 0m ? netBeforeFeesUsd / buyCostUsd : 0m;
+        var rejectAnalysis = AnalyzeRejectReasons(snapshot, evaluation, rawPositiveCross, profitable, rejectedDueToMinLifetime, settings, buyCostUsd);
 
         return new EvaluationTelemetrySnapshot(
             evaluation.TimestampUtc,
@@ -737,13 +746,20 @@ public sealed class ScannerWorker : BackgroundService
             netEdgeBeforeFeesPct,
             conservative.FeesTotalUsd,
             conservative.BuffersTotalUsd,
+            conservative.NetPnlUsd,
+            conservative.NetEdgePct,
             conservative.FillableBaseQuantity,
             snapshot.HealthFlags,
-            rejectReasons,
+            rejectAnalysis.RejectReasons,
+            rejectAnalysis.PrimaryRejectReason,
+            rejectAnalysis.SecondaryRejectReasons,
+            rejectAnalysis.WouldBeProfitableWithoutFees,
+            rejectAnalysis.WouldBeProfitableWithoutFillability,
             evaluation.BinanceBestBid,
             evaluation.BinanceBestAsk,
             evaluation.BybitBestBid,
-            evaluation.BybitBestAsk);
+            evaluation.BybitBestAsk,
+            evaluation.FillabilityDecision);
     }
 
     private bool HasRawPositiveCross(MarketDataSnapshot snapshot, ArbitrageDirection direction)
@@ -807,7 +823,6 @@ public sealed class ScannerWorker : BackgroundService
 
         return reasons
             .Distinct(StringComparer.Ordinal)
-            .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
     }
 
@@ -833,6 +848,138 @@ public sealed class ScannerWorker : BackgroundService
             telemetry.RejectReasons,
             telemetry.HealthFlags,
             telemetry.IsSnapshotUsableForEvaluation);
+
+    private CandidateRejectionEvent BuildCandidateRejectionEvent(EvaluationTelemetrySnapshot telemetry)
+    {
+        var buyExchange = telemetry.Direction.BuyExchange().ToString();
+        var sellExchange = telemetry.Direction.SellExchange().ToString();
+        var bestAsk = telemetry.Direction.BuyExchange() == ExchangeId.Binance ? telemetry.BinanceBestAsk : telemetry.BybitBestAsk;
+        var bestBid = telemetry.Direction.SellExchange() == ExchangeId.Binance ? telemetry.BinanceBestBid : telemetry.BybitBestBid;
+
+        return new CandidateRejectionEvent(
+            telemetry.TimestampUtc,
+            telemetry.Symbol,
+            telemetry.Direction,
+            telemetry.TestNotionalUsd,
+            buyExchange,
+            sellExchange,
+            bestAsk,
+            bestBid,
+            telemetry.FillabilityDecision.BuyTopOfBookQuantity,
+            telemetry.FillabilityDecision.SellTopOfBookQuantity,
+            telemetry.FillabilityDecision.BuyAggregatedFillableQuantity,
+            telemetry.FillabilityDecision.SellAggregatedFillableQuantity,
+            telemetry.FillabilityDecision.QuantityBeforeRounding,
+            telemetry.FillabilityDecision.QuantityAfterRoundingBinanceRules,
+            telemetry.FillabilityDecision.QuantityAfterRoundingBybitRules,
+            telemetry.FillabilityDecision.EffectiveExecutableQuantity,
+            telemetry.GrossPnlUsd,
+            telemetry.GrossEdgePct * 10_000m,
+            telemetry.FeesTotalUsd,
+            telemetry.BuffersTotalUsd,
+            telemetry.NetEdgeUsd,
+            telemetry.NetEdgePct * 10_000m,
+            telemetry.RejectReasons,
+            telemetry.PrimaryRejectReason,
+            telemetry.SecondaryRejectReasons,
+            telemetry.FillabilityDecision);
+    }
+
+    private bool ShouldExportCandidateRejectionSample(EvaluationTelemetrySnapshot telemetry)
+    {
+        var bucket = telemetry.TimestampUtc.UtcDateTime.ToString("yyyyMMddHH");
+        var primaryReason = telemetry.PrimaryRejectReason ?? "none";
+        var key = $"{bucket}:{primaryReason}";
+
+        if (_candidateRejectionSampleCounters.TryGetValue(key, out var currentCount) &&
+            currentCount >= CandidateRejectionSamplesPerHourPerPrimaryReason)
+        {
+            return false;
+        }
+
+        _candidateRejectionSampleCounters[key] = currentCount + 1;
+        return true;
+    }
+
+    private RejectAnalysis AnalyzeRejectReasons(
+        MarketDataSnapshot snapshot,
+        OpportunityPairEvaluation evaluation,
+        bool rawPositiveCross,
+        bool profitable,
+        bool rejectedDueToMinLifetime,
+        AppSettings settings,
+        decimal buyCostUsd)
+    {
+        var rejectReasons = rawPositiveCross
+            ? DetermineRejectReasons(snapshot, evaluation, profitable, rejectedDueToMinLifetime)
+            : [];
+
+        var primaryRejectReason = rejectReasons.Count > 0 ? rejectReasons[0] : null;
+        var secondaryRejectReasons = rejectReasons.Skip(1).ToArray();
+        var conservative = evaluation.Conservative;
+        var wouldBeProfitableWithoutFees = WouldBeProfitableWithoutFees(conservative, snapshot, rejectedDueToMinLifetime, settings, buyCostUsd);
+        var wouldBeProfitableWithoutFillability = WouldBeProfitableWithoutFillability(conservative, snapshot, rejectedDueToMinLifetime, settings);
+
+        return new RejectAnalysis(
+            rejectReasons,
+            primaryRejectReason,
+            secondaryRejectReasons,
+            wouldBeProfitableWithoutFees,
+            wouldBeProfitableWithoutFillability);
+    }
+
+    private static bool WouldBeProfitableWithoutFees(
+        OpportunityEvaluation conservative,
+        MarketDataSnapshot snapshot,
+        bool rejectedDueToMinLifetime,
+        AppSettings settings,
+        decimal buyCostUsd)
+    {
+        if (HasHardDegradation(snapshot.HealthFlags) || rejectedDueToMinLifetime)
+        {
+            return false;
+        }
+
+        if (string.Equals(conservative.RejectReason, "Symbol minimums not met", StringComparison.Ordinal) ||
+            conservative.FillabilityStatus != FillabilityStatus.Fillable)
+        {
+            return false;
+        }
+
+        var netWithoutFeesUsd = conservative.NetPnlUsd + conservative.FeesTotalUsd;
+        var netWithoutFeesBps = buyCostUsd > 0m ? (netWithoutFeesUsd / buyCostUsd) * 10_000m : 0m;
+        return netWithoutFeesUsd > 0m &&
+               netWithoutFeesUsd >= settings.Thresholds.EntryThresholdUsd &&
+               netWithoutFeesBps >= settings.Thresholds.EntryThresholdBps;
+    }
+
+    private static bool WouldBeProfitableWithoutFillability(
+        OpportunityEvaluation conservative,
+        MarketDataSnapshot snapshot,
+        bool rejectedDueToMinLifetime,
+        AppSettings settings)
+    {
+        if (HasHardDegradation(snapshot.HealthFlags) || rejectedDueToMinLifetime)
+        {
+            return false;
+        }
+
+        if (string.Equals(conservative.RejectReason, "Symbol minimums not met", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return conservative.NetPnlUsd > 0m &&
+               conservative.NetPnlUsd >= settings.Thresholds.EntryThresholdUsd &&
+               conservative.NetEdgePct * 10_000m >= settings.Thresholds.EntryThresholdBps;
+    }
+
+    private sealed record RejectAnalysis(
+        IReadOnlyList<string> RejectReasons,
+        string? PrimaryRejectReason,
+        IReadOnlyList<string> SecondaryRejectReasons,
+        bool WouldBeProfitableWithoutFees,
+        bool WouldBeProfitableWithoutFillability);
 
     private StaleDiagnosticEvent BuildStaleDiagnosticEvent(
         MarketDataSnapshot snapshot,

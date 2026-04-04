@@ -1,7 +1,7 @@
 repo: ArbiScan
 branch: main
-latest_commit_sha: cf035ecb1fccf9021af41ce25144289f0f254e71
-generated_at_utc: 2026-04-02T09:54:57Z
+latest_commit_sha: d4dd80469b02c7c9aa3269c82cf6dc99703f37e1
+generated_at_utc: 2026-04-04T15:28:35Z
 
 # 01 Critical Files Map
 
@@ -20,7 +20,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 
 | Class / Component | File path | Purpose |
 | --- | --- | --- |
-| `ScannerWorker` | `Scanner/ScannerWorker.cs` | Single hosted background service that initializes adapters, runs the scan loop, persists snapshots/windows/health, generates summaries, and sends Telegram notifications. |
+| `ScannerWorker` | `Scanner/ScannerWorker.cs` | Single hosted background service that initializes adapters, runs the scan loop, persists snapshots/windows/health, generates summaries, exports sampled candidate-rejection diagnostics, and sends Telegram notifications. |
 | Hourly / daily / cumulative summary timers | `Scanner/ScannerWorker.cs` | Internal scheduler logic inside the worker for summary cutoffs, health report export, and periodic heartbeat cadence. |
 
 ## C. Runtime Orchestration / Execution Flow
@@ -35,12 +35,13 @@ generated_at_utc: 2026-04-02T09:54:57Z
 
 | Class / Component | File path | Purpose |
 | --- | --- | --- |
-| `OpportunityDetector` | `Core/Services/OpportunityDetector.cs` | Core decision engine. Evaluates both arbitrage directions for each test notional, computes optimistic/conservative outcomes, rejects degraded data, and returns edge/fee/buffer results. |
+| `OpportunityDetector` | `Core/Services/OpportunityDetector.cs` | Core decision engine. Evaluates both arbitrage directions for each test notional, computes optimistic/conservative outcomes, rejects degraded data, and now emits structured fillability decision payloads with pre/post-rounding quantities. |
 | `FillableSizeCalculator` | `Core/Services/FillableSizeCalculator.cs` | Sweeps order book depth by quote or base amount to estimate executable quantity and fillability. |
 | `FeeCalculator` | `Core/Services/FeeCalculator.cs` | Applies exchange-specific taker fees to estimated legs. |
 | `SymbolRulesNormalizer` | `Core/Services/SymbolRulesNormalizer.cs` | Rounds executable quantity to both exchanges' constraints and checks minimums. |
 | `QuoteStalenessTracker` | `Core/Services/QuoteStalenessTracker.cs` | Tracks continuous stale-duration per exchange so stale health is confirmed over time instead of firing on a single threshold crossing. |
 | `HealthReportGenerator` | `Core/Services/HealthReportGenerator.cs` | Aggregates health events into a dedicated health report with reconnect/resync/stale counts, degradation causes, and longest stale intervals. |
+| `FillabilityDecisionDetails`, `CandidateRejectionEvent`, `FillabilityDiagnosticsReport` | `Core/Models/*.cs` | New diagnostic payloads for sampled reject exports and summary-level fillability analysis. |
 | Domain records | `Core/Models/*.cs` | Canonical runtime/domain payloads for market snapshots, evaluations, windows, summaries, health events, and order book snapshots. |
 
 ## E. Market / Exchange / Integration / External Gateway Layer
@@ -61,7 +62,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 | `IOpportunityRepository` | `Core/Interfaces/IOpportunityRepository.cs` | Persistence abstraction for order book snapshots, health events, closed windows, and summary reports. |
 | `SqliteOpportunityRepository` | `Infrastructure/Persistence/SqliteOpportunityRepository.cs` | SQLite-backed repository. Creates schema inline, persists review-relevant runtime artifacts, and reads windows/health for summary generation. |
 | Inline SQLite schema | `Infrastructure/Persistence/SqliteOpportunityRepository.cs` | Defines the four persisted tables: `orderbook_snapshots`, `health_events`, `window_events`, `summary_reports`. No separate migrations or ORM context exist in this repository. |
-| `IReportExporter` / `JsonReportExporter` | `Core/Interfaces/IReportExporter.cs`, `Infrastructure/Reporting/JsonReportExporter.cs` | Writes JSON/JSONL exports for persisted artifacts plus standalone health report JSON files. |
+| `IReportExporter` / `JsonReportExporter` | `Core/Interfaces/IReportExporter.cs`, `Infrastructure/Reporting/JsonReportExporter.cs` | Writes JSON/JSONL exports for persisted artifacts plus standalone health, candidate-rejection, and fillability-diagnostics JSON files. |
 | Runtime artifact collection helper | `scripts/collect-analysis-bundle.sh` | Packages the logs/reports/config requested for follow-up analysis into a sanitized bundle from VPS storage. |
 
 ## G. Runtime State / Status / Snapshot / Diagnostics
@@ -71,7 +72,7 @@ generated_at_utc: 2026-04-02T09:54:57Z
 | Health state tracking | `Scanner/ScannerWorker.cs` | Emits `ApplicationStarted`, status transitions, reconnect/resync, stale detection/recovery, and overall health changes. |
 | `RollingFileLoggerProvider` | `Infrastructure/Logging/RollingFileLoggerProvider.cs` | Writes application logs to daily rotating files under mounted storage. |
 | Heartbeat message builder | `Scanner/ScannerWorker.cs` | Emits periodic diagnostic Telegram heartbeat with exchange status, callback/update timestamps, top of book, uptime, and cumulative reconnect/resync/stale counters. |
-| `SummaryGenerator` | `Core/Services/SummaryGenerator.cs` | Aggregates persisted windows and health events into hourly/daily/cumulative trading summaries. |
+| `SummaryGenerator` | `Core/Services/SummaryGenerator.cs` | Aggregates persisted windows and health events into hourly/daily/cumulative trading summaries, including primary/secondary reject accounting and fillability diagnostics by notional. |
 | `HealthReportGenerator` | `Core/Services/HealthReportGenerator.cs` | Produces dedicated health-focused diagnostics reports from persisted health events. |
 
 ## H. Tests

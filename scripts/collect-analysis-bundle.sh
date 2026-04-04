@@ -71,6 +71,7 @@ copy_if_exists "${reports_root}/health-events-${analysis_date}.jsonl" "health-ev
 copy_if_exists "${reports_root}/orderbook-snapshots-${analysis_date}.jsonl" "orderbook-snapshots-${analysis_date}.jsonl"
 copy_if_exists "${reports_root}/stale-diagnostics-${analysis_date}.jsonl" "stale-diagnostics-${analysis_date}.jsonl"
 copy_if_exists "${reports_root}/rejected-positive-signals-${analysis_date}.jsonl" "rejected-positive-signals-${analysis_date}.jsonl"
+copy_if_exists "${reports_root}/candidate-rejections-${analysis_date}.jsonl" "candidate-rejections-${analysis_date}.jsonl"
 
 if [[ -f "${reports_root}/window-events-${analysis_date}.jsonl" ]]; then
   cp "${reports_root}/window-events-${analysis_date}.jsonl" "${bundle_dir}/window-events-${analysis_date}.jsonl"
@@ -85,6 +86,9 @@ copy_matching_files "${reports_root}" "cumulative-*.json"
 copy_matching_files "${reports_root}" "health-hourly-*.json"
 copy_matching_files "${reports_root}" "health-daily-*.json"
 copy_matching_files "${reports_root}" "health-cumulative-*.json"
+copy_matching_files "${reports_root}" "fillability-diagnostics-hourly-*.json"
+copy_matching_files "${reports_root}" "fillability-diagnostics-daily-*.json"
+copy_matching_files "${reports_root}" "fillability-diagnostics-cumulative-*.json"
 
 redact_json "${config_root}/appsettings.json" "production-appsettings.redacted.json"
 redact_json "${config_root}/telegramsettings.json" "telegramsettings.redacted.json"
@@ -152,9 +156,11 @@ Included when available:
 - orderbook-snapshots jsonl
 - stale-diagnostics jsonl
 - rejected-positive-signals jsonl
+- candidate-rejections jsonl
 - window-events jsonl or explicit missing marker
 - hourly/daily/cumulative summaries
 - health-hourly/health-daily/health-cumulative reports
+- fillability-diagnostics-hourly/daily/cumulative reports
 - redacted production appsettings
 - redacted telegramsettings
 - runtime-meta.json

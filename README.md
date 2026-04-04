@@ -62,10 +62,12 @@ Generated artifacts:
 - `reports/health-events-YYYYMMDD.jsonl`: health and degraded-state events
 - `reports/stale-diagnostics-YYYYMMDD.jsonl`: per-stale/per-recovery diagnostics
 - `reports/rejected-positive-signals-YYYYMMDD.jsonl`: raw-positive signals rejected before windowing
+- `reports/candidate-rejections-YYYYMMDD.jsonl`: sampled raw-positive rejection diagnostics with fillability payload
 - `reports/window-events-YYYYMMDD.jsonl`: closed opportunity windows
 - `reports/summaries-YYYYMMDD.jsonl`: machine-readable summaries
 - `reports/hourly-*.json`, `daily-*.json`, `cumulative-*.json`: summary snapshots
 - `reports/health-hourly-*.json`, `health-daily-*.json`, `health-cumulative-*.json`: aggregated health-only reports
+- `reports/fillability-diagnostics-hourly-*.json`, `fillability-diagnostics-daily-*.json`, `fillability-diagnostics-cumulative-*.json`: raw-positive fillability diagnostics
 
 ## Configuration
 
@@ -145,12 +147,15 @@ Hourly, daily and cumulative summaries include:
 
 - window counts by direction and notional
 - raw-positive cross counts by direction
+- primary and secondary reject reason counts
 - reject reasons by direction, by notional, and by direction+notional
+- overlap / what-if counters for `fees` and `fillability`
 - positive gross/net counts
 - lifetime distribution
 - pnl distributions
 - fee and buffer totals
 - fillability counts
+- embedded fillability diagnostics block by notional
 - health/reconnect/resync/stale counters
 - healthy vs degraded duration
 - computed final assessment text

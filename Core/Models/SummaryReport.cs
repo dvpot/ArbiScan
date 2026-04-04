@@ -38,4 +38,5 @@ public sealed record SummaryReport(
     long HealthyDurationMs,
     long DegradedDurationMs,
     SummaryDebugStats DebugStats,
+    FillabilityDiagnosticsReport FillabilityDiagnostics,
     string FinalAssessment);

@@ -30,14 +30,32 @@ public sealed class OpportunityDetector : IOpportunityDetector
         if (buyMarket is null || sellMarket is null)
         {
             var empty = CreateRejectedEvaluation(AnalysisMode.Conservative, direction, testNotionalUsd, snapshot.HealthFlags | DataHealthFlags.MissingOrderBook, "Missing market snapshot");
-            return new OpportunityPairEvaluation(snapshot.CapturedAtUtc, direction, testNotionalUsd, empty with { Mode = AnalysisMode.Optimistic }, empty, 0m, 0m, 0m, 0m, empty.HealthFlags);
+            return new OpportunityPairEvaluation(
+                snapshot.CapturedAtUtc,
+                direction,
+                testNotionalUsd,
+                empty with { Mode = AnalysisMode.Optimistic },
+                empty,
+                0m,
+                0m,
+                0m,
+                0m,
+                empty.HealthFlags,
+                BuildMissingMarketFillabilityDecision(testNotionalUsd));
         }
 
         var healthFlags = snapshot.HealthFlags;
+        var buyBestAsk = buyMarket.OrderBook.BestAsk?.Price ?? 0m;
+        var buyTopQuantity = buyMarket.OrderBook.BestAsk?.Quantity ?? 0m;
+        var sellTopQuantity = sellMarket.OrderBook.BestBid?.Quantity ?? 0m;
+        var requiredBaseQuantity = buyBestAsk > 0m ? testNotionalUsd / buyBestAsk : 0m;
         var buyLiquidityFromQuote = _fillableSizeCalculator.SweepQuote(buyMarket.OrderBook, testNotionalUsd, TradeSide.Buy);
         var sellLiquidityBase = _fillableSizeCalculator.GetAvailableBaseLiquidity(sellMarket.OrderBook, TradeSide.Sell);
 
-        var executableBase = Math.Min(buyLiquidityFromQuote.ExecutedBaseQuantity, sellLiquidityBase);
+        var quantityBeforeRounding = Math.Min(buyLiquidityFromQuote.ExecutedBaseQuantity, sellLiquidityBase);
+        var roundedForBinance = SymbolRulesNormalizer.RoundDownToStep(quantityBeforeRounding, snapshot.Binance?.Rules.QuantityStep ?? 0m);
+        var roundedForBybit = SymbolRulesNormalizer.RoundDownToStep(quantityBeforeRounding, snapshot.Bybit?.Rules.QuantityStep ?? 0m);
+        var executableBase = quantityBeforeRounding;
         executableBase = SymbolRulesNormalizer.GetExecutableQuantity(executableBase, buyMarket.Rules, sellMarket.Rules);
 
         var optimistic = BuildEvaluation(
@@ -66,6 +84,20 @@ public sealed class OpportunityDetector : IOpportunityDetector
             settings,
             conservativeBufferRate);
 
+        var fillabilityDecision = BuildFillabilityDecision(
+            testNotionalUsd,
+            requiredBaseQuantity,
+            buyTopQuantity,
+            sellTopQuantity,
+            buyLiquidityFromQuote,
+            sellLiquidityBase,
+            quantityBeforeRounding,
+            roundedForBinance,
+            roundedForBybit,
+            executableBase,
+            buyMarket,
+            sellMarket);
+
         return new OpportunityPairEvaluation(
             snapshot.CapturedAtUtc,
             direction,
@@ -76,7 +108,8 @@ public sealed class OpportunityDetector : IOpportunityDetector
             buyExchange == ExchangeId.Binance ? buyMarket.OrderBook.BestAsk?.Price ?? 0m : sellMarket.OrderBook.BestAsk?.Price ?? 0m,
             buyExchange == ExchangeId.Bybit ? buyMarket.OrderBook.BestBid?.Price ?? 0m : sellMarket.OrderBook.BestBid?.Price ?? 0m,
             buyExchange == ExchangeId.Bybit ? buyMarket.OrderBook.BestAsk?.Price ?? 0m : sellMarket.OrderBook.BestAsk?.Price ?? 0m,
-            healthFlags);
+            healthFlags,
+            fillabilityDecision);
     }
 
     private OpportunityEvaluation BuildEvaluation(
@@ -209,4 +242,123 @@ public sealed class OpportunityDetector : IOpportunityDetector
 
     private static decimal ComputeBufferUsd(decimal totalBufferBps, decimal buyCostUsd, decimal sellProceedsUsd, decimal buyLiquidityDust) =>
         ((buyCostUsd + sellProceedsUsd) * totalBufferBps / 10_000m) + buyLiquidityDust;
+
+    private FillabilityDecisionDetails BuildFillabilityDecision(
+        decimal testNotionalUsd,
+        decimal requiredBaseQuantity,
+        decimal buyTopQuantity,
+        decimal sellTopQuantity,
+        SweepResult buyLiquidityFromQuote,
+        decimal sellLiquidityBase,
+        decimal quantityBeforeRounding,
+        decimal roundedForBinance,
+        decimal roundedForBybit,
+        decimal executableBase,
+        ExchangeMarketSnapshot buyMarket,
+        ExchangeMarketSnapshot sellMarket)
+    {
+        var buySweep = executableBase > 0m
+            ? _fillableSizeCalculator.SweepBase(buyMarket.OrderBook, executableBase, TradeSide.Buy)
+            : new SweepResult(TradeSide.Buy, executableBase, 0m, 0m, 0m, buyMarket.OrderBook.BestAsk?.Price, false, 0);
+
+        var sellSweep = executableBase > 0m
+            ? _fillableSizeCalculator.SweepBase(sellMarket.OrderBook, executableBase, TradeSide.Sell)
+            : new SweepResult(TradeSide.Sell, executableBase, 0m, 0m, 0m, sellMarket.OrderBook.BestBid?.Price, false, 0);
+
+        var decisionCode = "fillable";
+        var decisionSummary = "Requested notional remains executable after depth sweep and exchange rounding.";
+        string? detail = null;
+
+        if (!buyLiquidityFromQuote.FullyFilled)
+        {
+            decisionCode = "buy_quote_depth_insufficient";
+            decisionSummary = "Buy-side ask depth cannot fully consume the requested quote notional.";
+            detail = "Requested quote notional exceeds visible buy-side depth.";
+        }
+        else if (sellLiquidityBase <= 0m)
+        {
+            decisionCode = "sell_liquidity_unavailable";
+            decisionSummary = "Sell-side bid depth has no executable base liquidity.";
+            detail = "No positive bid quantity was available on the sell venue.";
+        }
+        else if (quantityBeforeRounding <= 0m)
+        {
+            decisionCode = "pre_rounding_quantity_zero";
+            decisionSummary = "No common executable quantity exists before exchange rule rounding.";
+            detail = "The minimum of buy-side and sell-side liquidity collapsed to zero.";
+        }
+        else if (executableBase <= 0m)
+        {
+            decisionCode = "rounded_below_exchange_minimum";
+            decisionSummary = "Exchange quantity rules rounded the executable size below the tradable minimum.";
+            detail = "Shared executable quantity becomes zero after applying Binance/Bybit quantity steps and minimums.";
+        }
+        else if (!buySweep.FullyFilled)
+        {
+            decisionCode = "buy_depth_insufficient_after_rounding";
+            decisionSummary = "Buy-side depth cannot support the rounded executable quantity.";
+            detail = "Rounded executable quantity requires more ask depth than was available.";
+        }
+        else if (!sellSweep.FullyFilled)
+        {
+            decisionCode = "sell_depth_insufficient_after_rounding";
+            decisionSummary = "Sell-side depth cannot support the rounded executable quantity.";
+            detail = "Rounded executable quantity requires more bid depth than was available.";
+        }
+        else if (buySweep.ExecutedQuoteQuantity < testNotionalUsd * 0.999m)
+        {
+            decisionCode = "quote_shortfall_after_rounding";
+            decisionSummary = "Rounded executable quantity no longer covers the requested quote notional.";
+            detail = "The trade remains only partially fillable after exchange-specific quantity normalization.";
+        }
+
+        return new FillabilityDecisionDetails(
+            decisionCode,
+            decisionSummary,
+            testNotionalUsd,
+            requiredBaseQuantity,
+            buyTopQuantity,
+            sellTopQuantity,
+            Math.Min(buyTopQuantity, sellTopQuantity),
+            buyLiquidityFromQuote.ExecutedBaseQuantity,
+            sellLiquidityBase,
+            Math.Min(buyLiquidityFromQuote.ExecutedBaseQuantity, sellLiquidityBase),
+            quantityBeforeRounding,
+            roundedForBinance,
+            roundedForBybit,
+            executableBase,
+            buySweep.ExecutedBaseQuantity,
+            sellSweep.ExecutedBaseQuantity,
+            buySweep.FullyFilled,
+            sellSweep.FullyFilled,
+            buyLiquidityFromQuote.ConsumedLevels,
+            buySweep.ConsumedLevels,
+            sellSweep.ConsumedLevels,
+            detail);
+    }
+
+    private static FillabilityDecisionDetails BuildMissingMarketFillabilityDecision(decimal testNotionalUsd) =>
+        new(
+            "missing_market_snapshot",
+            "One or both exchange snapshots are missing, so fillability cannot be evaluated.",
+            testNotionalUsd,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            0m,
+            false,
+            false,
+            0,
+            0,
+            0,
+            "Missing exchange snapshot.");
 }

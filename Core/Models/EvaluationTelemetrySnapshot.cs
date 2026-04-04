@@ -16,10 +16,17 @@ public sealed record EvaluationTelemetrySnapshot(
     decimal NetEdgeBeforeFeesPct,
     decimal FeesTotalUsd,
     decimal BuffersTotalUsd,
+    decimal NetEdgeUsd,
+    decimal NetEdgePct,
     decimal FillableBaseQuantity,
     DataHealthFlags HealthFlags,
     IReadOnlyList<string> RejectReasons,
+    string? PrimaryRejectReason,
+    IReadOnlyList<string> SecondaryRejectReasons,
+    bool WouldBeProfitableWithoutFees,
+    bool WouldBeProfitableWithoutFillability,
     decimal BinanceBestBid,
     decimal BinanceBestAsk,
     decimal BybitBestBid,
-    decimal BybitBestAsk);
+    decimal BybitBestAsk,
+    FillabilityDecisionDetails FillabilityDecision);

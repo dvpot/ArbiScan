@@ -12,4 +12,5 @@ public sealed record OpportunityPairEvaluation(
     decimal BinanceBestAsk,
     decimal BybitBestBid,
     decimal BybitBestAsk,
-    DataHealthFlags HealthFlags);
+    DataHealthFlags HealthFlags,
+    FillabilityDecisionDetails FillabilityDecision);

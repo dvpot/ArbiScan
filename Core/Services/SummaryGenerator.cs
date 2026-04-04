@@ -18,6 +18,8 @@ public sealed class SummaryGenerator : ISummaryGenerator
         var orderedWindows = windows.OrderBy(x => x.OpenedAtUtc).ToArray();
         var orderedHealth = healthEvents.OrderBy(x => x.TimestampUtc).ToArray();
         var debugStats = AggregateDebugStats(evaluationTelemetry);
+        var generatedAtUtc = DateTimeOffset.UtcNow;
+        var fillabilityDiagnostics = BuildFillabilityDiagnostics(period, generatedAtUtc, fromUtc, toUtc, symbol, evaluationTelemetry);
         var lifetimes = orderedWindows.Select(x => (double)x.LifetimeMs).OrderBy(x => x).ToArray();
         var netPnls = orderedWindows.Select(x => x.ConservativeNetPnlUsd).OrderBy(x => x).ToArray();
         var fillableSizes = orderedWindows.Select(x => x.FillableBaseQuantity).OrderBy(x => x).ToArray();
@@ -63,6 +65,7 @@ public sealed class SummaryGenerator : ISummaryGenerator
             healthyMs,
             degradedMs,
             debugStats,
+            fillabilityDiagnostics,
             BuildFinalAssessment(orderedWindows, debugStats));
     }
 
@@ -172,8 +175,19 @@ public sealed class SummaryGenerator : ISummaryGenerator
             .GroupBy(x => x)
             .ToDictionary(g => g.Key, g => g.Count());
 
+        var primaryRejectReasonCounts = rejected
+            .Where(x => !string.IsNullOrWhiteSpace(x.PrimaryRejectReason))
+            .GroupBy(x => x.PrimaryRejectReason!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        var secondaryRejectReasonCounts = rejected
+            .SelectMany(x => x.SecondaryRejectReasons)
+            .GroupBy(x => x, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
         var rejectedOnlyDueToFeesCount = rejected.Count(x => x.RejectReasons.SequenceEqual(["fees"]));
         var rejectedOnlyDueToFillabilityCount = rejected.Count(x => x.RejectReasons.SequenceEqual(["fillability"]));
+        var rejectedDueToFeesAndFillabilityCount = rejected.Count(x => x.RejectReasons.Contains("fees") && x.RejectReasons.Contains("fillability"));
         var rejectedDueToMultipleReasonsCount = rejected.Count(x => x.RejectReasons.Count > 1);
 
         return new SummaryDebugStats(
@@ -187,12 +201,101 @@ public sealed class SummaryGenerator : ISummaryGenerator
             rejected.Count(x => x.RejectReasons.Contains("other")),
             rejectedOnlyDueToFeesCount,
             rejectedOnlyDueToFillabilityCount,
+            rejectedDueToFeesAndFillabilityCount,
             rejectedDueToMultipleReasonsCount,
+            rejected.Count(x => x.WouldBeProfitableWithoutFees),
+            rejected.Count(x => x.WouldBeProfitableWithoutFillability),
             rawPositiveByDirection,
+            primaryRejectReasonCounts,
+            secondaryRejectReasonCounts,
             rejectReasonCountsByDirection,
             rejectReasonCountsByNotional,
             rejectReasonCountsByDirectionAndNotional);
     }
+
+    private static FillabilityDiagnosticsReport BuildFillabilityDiagnostics(
+        SummaryPeriod period,
+        DateTimeOffset generatedAtUtc,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        string symbol,
+        IReadOnlyCollection<EvaluationTelemetrySnapshot> evaluationTelemetry)
+    {
+        var rawPositive = evaluationTelemetry
+            .Where(x => x.IsRawPositiveCross)
+            .OrderBy(x => x.TimestampUtc)
+            .ToArray();
+
+        var fillableCountByNotional = GroupByNotional(rawPositive, x => x.FillabilityStatus == FillabilityStatus.Fillable);
+        var partiallyFillableCountByNotional = GroupByNotional(rawPositive, x => x.FillabilityStatus == FillabilityStatus.PartiallyFillable);
+        var notFillableCountByNotional = GroupByNotional(rawPositive, x => x.FillabilityStatus == FillabilityStatus.NotFillable);
+        var averageRequiredQuantityByNotional = AverageByNotional(rawPositive, x => x.FillabilityDecision.RequiredBaseQuantity);
+        var averageAvailableTop1QuantityByNotional = AverageByNotional(rawPositive, x => x.FillabilityDecision.EffectiveTopOfBookQuantity);
+        var averageAvailableTopNQuantityByNotional = AverageByNotional(rawPositive, x => x.FillabilityDecision.EffectiveAggregatedFillableQuantity);
+        var medianAvailableTopNQuantityByNotional = MedianByNotional(rawPositive, x => x.FillabilityDecision.EffectiveAggregatedFillableQuantity);
+        var averageRoundedExecutableQuantityByNotional = AverageByNotional(rawPositive, x => x.FillabilityDecision.EffectiveExecutableQuantity);
+
+        var topReasonsOfNonFillability = rawPositive
+            .Where(x => x.RejectReasons.Contains("fillability") || x.FillabilityStatus != FillabilityStatus.Fillable)
+            .GroupBy(x => x.FillabilityDecision.DecisionCode, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        var topReasonsOfNonFillabilityByNotional = rawPositive
+            .Where(x => x.RejectReasons.Contains("fillability") || x.FillabilityStatus != FillabilityStatus.Fillable)
+            .GroupBy(x => $"{x.TestNotionalUsd:0.########}:{x.FillabilityDecision.DecisionCode}", StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        return new FillabilityDiagnosticsReport(
+            period,
+            generatedAtUtc,
+            fromUtc,
+            toUtc,
+            symbol,
+            rawPositive.Length,
+            fillableCountByNotional,
+            partiallyFillableCountByNotional,
+            notFillableCountByNotional,
+            averageRequiredQuantityByNotional,
+            averageAvailableTop1QuantityByNotional,
+            averageAvailableTopNQuantityByNotional,
+            medianAvailableTopNQuantityByNotional,
+            averageRoundedExecutableQuantityByNotional,
+            topReasonsOfNonFillability,
+            topReasonsOfNonFillabilityByNotional);
+    }
+
+    private static IReadOnlyDictionary<string, int> GroupByNotional(
+        IEnumerable<EvaluationTelemetrySnapshot> telemetry,
+        Func<EvaluationTelemetrySnapshot, bool> predicate) =>
+        telemetry
+            .Where(predicate)
+            .GroupBy(x => x.TestNotionalUsd.ToString("0.########"), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+    private static IReadOnlyDictionary<string, decimal> AverageByNotional(
+        IEnumerable<EvaluationTelemetrySnapshot> telemetry,
+        Func<EvaluationTelemetrySnapshot, decimal> selector) =>
+        telemetry
+            .GroupBy(x => x.TestNotionalUsd.ToString("0.########"), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Any() ? g.Average(selector) : 0m, StringComparer.Ordinal);
+
+    private static IReadOnlyDictionary<string, decimal> MedianByNotional(
+        IEnumerable<EvaluationTelemetrySnapshot> telemetry,
+        Func<EvaluationTelemetrySnapshot, decimal> selector) =>
+        telemetry
+            .GroupBy(x => x.TestNotionalUsd.ToString("0.########"), StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var values = g.Select(selector).OrderBy(x => x).ToArray();
+                    return Median(values);
+                },
+                StringComparer.Ordinal);
 
     private static string BuildFinalAssessment(IReadOnlyCollection<OpportunityWindowEvent> windows, SummaryDebugStats debugStats)
     {
@@ -205,7 +308,9 @@ public sealed class SummaryGenerator : ISummaryGenerator
 
             return $"Статистически значимых окон не найдено. Raw positive cross-spread сигналов: {debugStats.RawPositiveCrossCount}. " +
                    $"Основные причины отсева: health={debugStats.RejectedDueToHealthCount}, fillability={debugStats.RejectedDueToFillabilityCount}, " +
-                   $"fees={debugStats.RejectedDueToFeesCount}, buffers={debugStats.RejectedDueToBuffersCount}, minLifetime={debugStats.RejectedDueToMinLifetimeCount}, rules={debugStats.RejectedDueToRulesCount}.";
+                   $"fees={debugStats.RejectedDueToFeesCount}, buffers={debugStats.RejectedDueToBuffersCount}, minLifetime={debugStats.RejectedDueToMinLifetimeCount}, rules={debugStats.RejectedDueToRulesCount}. " +
+                   $"Primary reject counts: {FormatTopReasons(debugStats.PrimaryRejectReasonCounts)}. " +
+                   $"What-if: without fees={debugStats.WouldBeProfitableWithoutFeesCount}, without fillability={debugStats.WouldBeProfitableWithoutFillabilityCount}.";
         }
 
         var bestDirection = windows
@@ -227,4 +332,12 @@ public sealed class SummaryGenerator : ISummaryGenerator
                $"Суммарный консервативный результат: {totalNet:0.########} USD. " +
                $"Основной фактор отсева: {(rejectedByVolume > 0 ? "недостаточная исполнимость и ограничения размера" : "комиссии и safety buffers")}.";
     }
+
+    private static string FormatTopReasons(IReadOnlyDictionary<string, int> counts) =>
+        counts.Count == 0
+            ? "none"
+            : string.Join(", ", counts
+                .OrderByDescending(x => x.Value)
+                .ThenBy(x => x.Key, StringComparer.Ordinal)
+                .Select(x => $"{x.Key}={x.Value}"));
 }

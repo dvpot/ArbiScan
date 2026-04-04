@@ -26,6 +26,9 @@ public sealed class JsonReportExporter : IReportExporter
     public Task ExportHealthEventAsync(HealthEvent healthEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"health-events-{healthEvent.TimestampUtc:yyyyMMdd}.jsonl"), healthEvent, cancellationToken);
 
+    public Task ExportCandidateRejectionAsync(CandidateRejectionEvent rejectionEvent, CancellationToken cancellationToken) =>
+        AppendJsonLineAsync(Path.Combine(_reportsPath, $"candidate-rejections-{rejectionEvent.TimestampUtc:yyyyMMdd}.jsonl"), rejectionEvent, cancellationToken);
+
     public Task ExportRejectedPositiveSignalAsync(RejectedPositiveSignalEvent signalEvent, CancellationToken cancellationToken) =>
         AppendJsonLineAsync(Path.Combine(_reportsPath, $"rejected-positive-signals-{signalEvent.TimestampUtc:yyyyMMdd}.jsonl"), signalEvent, cancellationToken);
 
@@ -52,10 +55,12 @@ public sealed class JsonReportExporter : IReportExporter
     public async Task ExportSummaryAsync(SummaryReport summary, CancellationToken cancellationToken)
     {
         var periodFile = Path.Combine(_reportsPath, $"{summary.Period.ToString().ToLowerInvariant()}-{summary.GeneratedAtUtc:yyyyMMddHHmmss}.json");
+        var fillabilityFile = Path.Combine(_reportsPath, $"fillability-diagnostics-{summary.Period.ToString().ToLowerInvariant()}-{summary.GeneratedAtUtc:yyyyMMddHHmmss}.json");
         await _gate.WaitAsync(cancellationToken);
         try
         {
             await File.WriteAllTextAsync(periodFile, JsonSerializer.Serialize(summary, JsonOptions), cancellationToken);
+            await File.WriteAllTextAsync(fillabilityFile, JsonSerializer.Serialize(summary.FillabilityDiagnostics, JsonOptions), cancellationToken);
             await AppendJsonLineAsync(Path.Combine(_reportsPath, $"summaries-{summary.GeneratedAtUtc:yyyyMMdd}.jsonl"), summary, cancellationToken, holdGate: true);
         }
         finally

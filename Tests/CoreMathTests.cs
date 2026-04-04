@@ -72,6 +72,49 @@ public sealed class CoreMathTests
         Assert.True(result.Conservative.NetPnlUsd > 0m);
     }
 
+    [Theory]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    public void OpportunityDetector_XrpDepthAndRoundingRemainFillableForSmallNotionals(decimal testNotionalUsd)
+    {
+        var detector = new OpportunityDetector(new FeeCalculator(0.001m, 0.001m), new FillableSizeCalculator());
+        var settings = CreateSettings();
+        var snapshot = new MarketDataSnapshot(
+            "XRPUSDT",
+            DateTimeOffset.UtcNow,
+            CreateExchangeSnapshot(ExchangeId.Binance, bid: 2.0500m, ask: 2.0000m, symbol: "XRPUSDT", baseAsset: "XRP", quantityStep: 1m, minQuantity: 1m, bidQuantity: 20_000m, askQuantity: 20_000m),
+            CreateExchangeSnapshot(ExchangeId.Bybit, bid: 2.0600m, ask: 2.0100m, symbol: "XRPUSDT", baseAsset: "XRP", quantityStep: 0.1m, minQuantity: 0.1m, bidQuantity: 25_000m, askQuantity: 25_000m),
+            DataHealthFlags.None);
+
+        var result = detector.Evaluate(snapshot, ArbitrageDirection.BuyBinanceSellBybit, testNotionalUsd, settings);
+
+        Assert.Equal(FillabilityStatus.Fillable, result.Conservative.FillabilityStatus);
+        Assert.True(result.FillabilityDecision.RequiredBaseQuantity > 0m);
+        Assert.True(result.FillabilityDecision.QuantityBeforeRounding >= result.FillabilityDecision.EffectiveExecutableQuantity);
+        Assert.True(result.FillabilityDecision.EffectiveExecutableQuantity > 0m);
+        Assert.Equal("fillable", result.FillabilityDecision.DecisionCode);
+    }
+
+    [Fact]
+    public void OpportunityDetector_XrpWholeUnitRoundingKeepsExecutableQuantityAboveMinimum()
+    {
+        var detector = new OpportunityDetector(new FeeCalculator(0.001m, 0.001m), new FillableSizeCalculator());
+        var settings = CreateSettings();
+        var snapshot = new MarketDataSnapshot(
+            "XRPUSDT",
+            DateTimeOffset.UtcNow,
+            CreateExchangeSnapshot(ExchangeId.Binance, bid: 2.0500m, ask: 1.9995m, symbol: "XRPUSDT", baseAsset: "XRP", quantityStep: 1m, minQuantity: 1m, bidQuantity: 10_000m, askQuantity: 10_000m),
+            CreateExchangeSnapshot(ExchangeId.Bybit, bid: 2.0600m, ask: 2.0100m, symbol: "XRPUSDT", baseAsset: "XRP", quantityStep: 0.1m, minQuantity: 0.1m, bidQuantity: 10_000m, askQuantity: 10_000m),
+            DataHealthFlags.None);
+
+        var result = detector.Evaluate(snapshot, ArbitrageDirection.BuyBinanceSellBybit, 10m, settings);
+
+        Assert.Equal(5m, result.FillabilityDecision.QuantityAfterRoundingBinanceRules);
+        Assert.Equal(5m, result.FillabilityDecision.EffectiveExecutableQuantity);
+        Assert.Equal(FillabilityStatus.Fillable, result.Conservative.FillabilityStatus);
+    }
+
     [Fact]
     public void OpportunityLifetimeTracker_ClosesWindowWhenEdgeDisappears()
     {
@@ -107,9 +150,9 @@ public sealed class CoreMathTests
 
         var telemetry = new[]
         {
-            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(5), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, false, true, FillabilityStatus.PartiallyFillable, 0.2m, 0.01m, 0.005m, 0.03m, 0.01m, 40m, DataHealthFlags.None, ["fees", "fillability"], 0.25m, 0.251m, 0.26m, 0.261m),
-            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(15), "TRXUSDT", ArbitrageDirection.BuyBybitSellBinance, 20m, true, false, false, FillabilityStatus.NotFillable, 0.1m, 0.006m, 0.006m, 0.2m, 0.01m, 10m, DataHealthFlags.Degraded, ["health", "min_lifetime", "rules"], 0.25m, 0.251m, 0.26m, 0.261m),
-            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(20), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, true, true, FillabilityStatus.Fillable, 0.3m, 0.015m, 0.014m, 0.01m, 0.01m, 50m, DataHealthFlags.None, [], 0.25m, 0.251m, 0.26m, 0.261m)
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(5), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, false, true, FillabilityStatus.PartiallyFillable, 0.2m, 0.01m, 0.005m, 0.03m, 0.01m, -0.02m, -0.002m, 40m, DataHealthFlags.None, ["fillability", "fees"], "fillability", ["fees"], false, true, 0.25m, 0.251m, 0.26m, 0.261m, CreateFillabilityDecisionDetails("quote_shortfall_after_rounding", 10m, 40m)),
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(15), "TRXUSDT", ArbitrageDirection.BuyBybitSellBinance, 20m, true, false, false, FillabilityStatus.NotFillable, 0.1m, 0.006m, 0.006m, 0.2m, 0.01m, -0.11m, -0.011m, 10m, DataHealthFlags.Degraded, ["health", "rules", "min_lifetime"], "health", ["rules", "min_lifetime"], false, false, 0.25m, 0.251m, 0.26m, 0.261m, CreateFillabilityDecisionDetails("rounded_below_exchange_minimum", 20m, 10m)),
+            new EvaluationTelemetrySnapshot(fromUtc.AddMinutes(20), "TRXUSDT", ArbitrageDirection.BuyBinanceSellBybit, 10m, true, true, true, FillabilityStatus.Fillable, 0.3m, 0.015m, 0.014m, 0.01m, 0.01m, 0.28m, 0.014m, 50m, DataHealthFlags.None, [], null, [], false, false, 0.25m, 0.251m, 0.26m, 0.261m, CreateFillabilityDecisionDetails("fillable", 10m, 50m))
         };
 
         var summary = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, "TRXUSDT", windows, health, telemetry);
@@ -124,8 +167,12 @@ public sealed class CoreMathTests
         Assert.Equal(3, summary.DebugStats.RawPositiveCrossCount);
         Assert.Equal(1, summary.DebugStats.RejectedDueToMinLifetimeCount);
         Assert.Equal(2, summary.DebugStats.RejectedDueToMultipleReasonsCount);
+        Assert.Equal(1, summary.DebugStats.RejectedDueToFeesAndFillabilityCount);
+        Assert.Equal(1, summary.DebugStats.WouldBeProfitableWithoutFillabilityCount);
         Assert.Equal(2, summary.DebugStats.RawPositiveCrossCountByDirection["BuyBinanceSellBybit"]);
         Assert.Equal(1, summary.DebugStats.RejectReasonCountsByNotional["10:fees"]);
+        Assert.Equal(1, summary.DebugStats.PrimaryRejectReasonCounts["fillability"]);
+        Assert.Equal(1, summary.FillabilityDiagnostics.FillableCountByNotional["10"]);
     }
 
     private static AppSettings CreateSettings(int minWindowLifetimeMs = 1_000) =>
@@ -151,11 +198,20 @@ public sealed class CoreMathTests
             }
         };
 
-    private static ExchangeMarketSnapshot CreateExchangeSnapshot(ExchangeId exchange, decimal bid, decimal ask)
+    private static ExchangeMarketSnapshot CreateExchangeSnapshot(
+        ExchangeId exchange,
+        decimal bid,
+        decimal ask,
+        string symbol = "TRXUSDT",
+        string baseAsset = "TRX",
+        decimal quantityStep = 0.1m,
+        decimal minQuantity = 1m,
+        decimal bidQuantity = 1_000m,
+        decimal askQuantity = 1_000m)
     {
-        var rules = new ExchangeSymbolRules(exchange, "TRXUSDT", "TRX", "USDT", 0.1m, 1m, 10_000m, 0.0001m, 5m);
+        var rules = new ExchangeSymbolRules(exchange, symbol, baseAsset, "USDT", quantityStep, minQuantity, 10_000m, 0.0001m, 5m);
         var book = new OrderBookSnapshot(
-            "TRXUSDT",
+            symbol,
             OrderBookSyncStatus.Synced,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
@@ -166,8 +222,8 @@ public sealed class CoreMathTests
             TimeSpan.Zero,
             DateTimeOffset.UtcNow,
             TimeSpan.Zero,
-            [new OrderBookLevel(bid, 1_000m), new OrderBookLevel(bid - 0.001m, 1_000m)],
-            [new OrderBookLevel(ask, 1_000m), new OrderBookLevel(ask + 0.001m, 1_000m)]);
+            [new OrderBookLevel(bid, bidQuantity), new OrderBookLevel(bid - 0.001m, bidQuantity)],
+            [new OrderBookLevel(ask, askQuantity), new OrderBookLevel(ask + 0.001m, askQuantity)]);
 
         return new ExchangeMarketSnapshot(exchange, rules, book);
     }
@@ -200,6 +256,31 @@ public sealed class CoreMathTests
             NetEdgePct = conservative.NetEdgePct + 0.001m
         };
 
-        return new OpportunityPairEvaluation(timestampUtc, ArbitrageDirection.BuyBinanceSellBybit, 10m, optimistic, conservative, 0.25m, 0.251m, 0.26m, 0.261m, conservative.HealthFlags);
+        return new OpportunityPairEvaluation(timestampUtc, ArbitrageDirection.BuyBinanceSellBybit, 10m, optimistic, conservative, 0.25m, 0.251m, 0.26m, 0.261m, conservative.HealthFlags, CreateFillabilityDecisionDetails("fillable", 10m, 40m));
     }
+
+    private static FillabilityDecisionDetails CreateFillabilityDecisionDetails(string decisionCode, decimal requestedQuoteUsd, decimal executableQuantity) =>
+        new(
+            decisionCode,
+            decisionCode,
+            requestedQuoteUsd,
+            executableQuantity,
+            executableQuantity * 2m,
+            executableQuantity * 2m,
+            executableQuantity * 2m,
+            executableQuantity * 3m,
+            executableQuantity * 3m,
+            executableQuantity * 3m,
+            executableQuantity,
+            executableQuantity,
+            executableQuantity,
+            executableQuantity,
+            executableQuantity,
+            executableQuantity,
+            decisionCode == "fillable",
+            decisionCode == "fillable",
+            1,
+            1,
+            1,
+            null);
 }
