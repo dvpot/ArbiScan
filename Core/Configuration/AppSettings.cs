@@ -89,6 +89,9 @@ public sealed class TelegramSettings
     [Range(1, 1440)]
     public int HeartbeatIntervalMinutes { get; init; } = 30;
 
+    [Range(0, 1440)]
+    public int HealthStateNotificationCooldownMinutes { get; init; } = 30;
+
     public bool NotifyOnStartup { get; init; } = true;
 
     public bool NotifyOnShutdown { get; init; } = true;

@@ -13,6 +13,12 @@ namespace ArbiScan.Scanner;
 
 public sealed class ScannerWorker : BackgroundService
 {
+    private sealed class HealthNotificationState
+    {
+        public DateTimeOffset? LastStaleNotificationAtUtc { get; set; }
+        public bool HasActiveStaleNotification { get; set; }
+    }
+
     private sealed class SignalLifecycleState
     {
         public required ArbitrageDirection Direction { get; init; }
@@ -39,6 +45,7 @@ public sealed class ScannerWorker : BackgroundService
     private readonly Dictionary<ExchangeId, bool> _wasHealthyByExchange = new();
     private readonly Dictionary<ExchangeId, bool> _wasStaleByExchange = new();
     private readonly Dictionary<ExchangeId, DateTimeOffset?> _staleCandidateSinceByExchange = new();
+    private readonly Dictionary<ExchangeId, HealthNotificationState> _healthNotificationStatesByExchange = new();
     private readonly Dictionary<string, SignalLifecycleState> _signalLifecycleStates = new(StringComparer.Ordinal);
     private DateTimeOffset _startedAtUtc;
     private string _shutdownReason = "Остановка без уточнённой причины.";
@@ -331,9 +338,57 @@ public sealed class ScannerWorker : BackgroundService
         if (_telegramNotifier.IsEnabled &&
             _telegramSettings.NotifyOnHealthStateChanges &&
             healthEvent.Exchange.HasValue &&
-            healthEvent.EventType is HealthEventType.ExchangeRecovered or HealthEventType.StaleQuotesDetected or HealthEventType.StaleQuotesRecovered)
+            ShouldNotifyHealthEventInTelegram(healthEvent))
         {
             await _telegramNotifier.SendMessageAsync($"{AppVersion.ProductName} health: {healthEvent.Message}", cancellationToken);
+        }
+    }
+
+    private bool ShouldNotifyHealthEventInTelegram(HealthEvent healthEvent)
+    {
+        var exchange = healthEvent.Exchange!.Value;
+        if (!_healthNotificationStatesByExchange.TryGetValue(exchange, out var state))
+        {
+            state = new HealthNotificationState();
+            _healthNotificationStatesByExchange[exchange] = state;
+        }
+
+        var nowUtc = healthEvent.TimestampUtc;
+        var cooldown = TimeSpan.FromMinutes(_telegramSettings.HealthStateNotificationCooldownMinutes);
+
+        switch (healthEvent.EventType)
+        {
+            case HealthEventType.StaleQuotesDetected:
+            {
+                if (cooldown > TimeSpan.Zero &&
+                    state.LastStaleNotificationAtUtc.HasValue &&
+                    nowUtc - state.LastStaleNotificationAtUtc.Value < cooldown)
+                {
+                    state.HasActiveStaleNotification = false;
+                    return false;
+                }
+
+                state.LastStaleNotificationAtUtc = nowUtc;
+                state.HasActiveStaleNotification = true;
+                return true;
+            }
+
+            case HealthEventType.StaleQuotesRecovered:
+            {
+                if (!state.HasActiveStaleNotification)
+                {
+                    return false;
+                }
+
+                state.HasActiveStaleNotification = false;
+                return true;
+            }
+
+            case HealthEventType.ExchangeRecovered:
+                return false;
+
+            default:
+                return false;
         }
     }
 

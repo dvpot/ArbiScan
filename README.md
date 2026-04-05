@@ -96,6 +96,7 @@ Telegram settings:
 - `BotToken`
 - `AllowedUserId`
 - `HeartbeatIntervalMinutes`
+- `HealthStateNotificationCooldownMinutes`
 - `NotifyOnStartup`
 - `NotifyOnShutdown`
 - `NotifyOnCriticalError`

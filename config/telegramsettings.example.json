@@ -4,6 +4,7 @@
     "BotToken": "",
     "AllowedUserId": 0,
     "HeartbeatIntervalMinutes": 30,
+    "HealthStateNotificationCooldownMinutes": 30,
     "NotifyOnStartup": true,
     "NotifyOnShutdown": true,
     "NotifyOnCriticalError": true,
