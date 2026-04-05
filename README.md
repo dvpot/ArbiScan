@@ -80,6 +80,7 @@ Important app settings:
 - `QuoteAsset`
 - `ScanIntervalMs`
 - `QuoteStalenessThresholdMs`
+- `StaleConfirmationMs`
 - `TestNotionalsUsd`
 - `BinanceTakerFeeRate`
 - `BybitTakerFeeRate`

@@ -20,6 +20,9 @@ public sealed class AppSettings
     [Range(1, 86_400_000)]
     public int QuoteStalenessThresholdMs { get; init; } = 2_000;
 
+    [Range(0, 86_400_000)]
+    public int StaleConfirmationMs { get; init; } = 5_000;
+
     [Range(60, 86_400)]
     public int CumulativeSummaryIntervalSeconds { get; init; } = 3_600;
 

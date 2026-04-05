@@ -38,6 +38,7 @@ public sealed class ScannerWorker : BackgroundService
 
     private readonly Dictionary<ExchangeId, bool> _wasHealthyByExchange = new();
     private readonly Dictionary<ExchangeId, bool> _wasStaleByExchange = new();
+    private readonly Dictionary<ExchangeId, DateTimeOffset?> _staleCandidateSinceByExchange = new();
     private readonly Dictionary<string, SignalLifecycleState> _signalLifecycleStates = new(StringComparer.Ordinal);
     private DateTimeOffset _startedAtUtc;
     private string _shutdownReason = "Остановка без уточнённой причины.";
@@ -224,11 +225,13 @@ public sealed class ScannerWorker : BackgroundService
         var isStale = exchangeSnapshot is not null &&
                       exchangeSnapshot.HasQuote &&
                       exchangeSnapshot.DataAge.TotalMilliseconds > _settings.QuoteStalenessThresholdMs;
+        var nowUtc = DateTimeOffset.UtcNow;
 
         if (!_wasHealthyByExchange.TryGetValue(exchange, out var previousHealthy))
         {
             _wasHealthyByExchange[exchange] = isHealthy;
-            _wasStaleByExchange[exchange] = isStale;
+            _wasStaleByExchange[exchange] = false;
+            _staleCandidateSinceByExchange[exchange] = isStale ? nowUtc : null;
             if (isHealthy)
             {
                 await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeConnected, exchange, DataHealthFlags.None, true, $"{exchange} quote stream connected"), cancellationToken);
@@ -237,29 +240,49 @@ public sealed class ScannerWorker : BackgroundService
             return;
         }
 
-        if (!_wasStaleByExchange.TryGetValue(exchange, out var previousStale))
+        if (!_wasStaleByExchange.TryGetValue(exchange, out var previousStaleConfirmed))
         {
-            previousStale = false;
+            previousStaleConfirmed = false;
         }
 
-        if (!previousStale && isStale)
+        if (!_staleCandidateSinceByExchange.TryGetValue(exchange, out var staleCandidateSince))
         {
-            await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesDetected, exchange, staleFlag, false, $"{exchange} quotes became stale"), cancellationToken);
-            _logger.LogWarning("{Exchange} quotes became stale", exchange);
-        }
-        else if (previousStale && !isStale)
-        {
-            await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesRecovered, exchange, DataHealthFlags.None, isHealthy, $"{exchange} quotes recovered from stale"), cancellationToken);
-            _logger.LogInformation("{Exchange} quotes recovered from stale", exchange);
+            staleCandidateSince = null;
         }
 
-        if (!previousHealthy && isHealthy && !previousStale)
+        if (isStale)
+        {
+            staleCandidateSince ??= nowUtc;
+            _staleCandidateSinceByExchange[exchange] = staleCandidateSince;
+
+            var staleDurationMs = (nowUtc - staleCandidateSince.Value).TotalMilliseconds;
+            if (!previousStaleConfirmed && staleDurationMs >= _settings.StaleConfirmationMs)
+            {
+                await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesDetected, exchange, staleFlag, false, $"{exchange} quotes became stale"), cancellationToken);
+                _logger.LogWarning("{Exchange} quotes became stale after {StaleDurationMs:0} ms above threshold", exchange, staleDurationMs);
+                previousStaleConfirmed = true;
+            }
+        }
+        else
+        {
+            _staleCandidateSinceByExchange[exchange] = null;
+
+            if (previousStaleConfirmed)
+            {
+                await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesRecovered, exchange, DataHealthFlags.None, isHealthy, $"{exchange} quotes recovered from stale"), cancellationToken);
+                _logger.LogInformation("{Exchange} quotes recovered from stale", exchange);
+            }
+
+            previousStaleConfirmed = false;
+        }
+
+        if (!previousHealthy && isHealthy && !previousStaleConfirmed)
         {
             await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeRecovered, exchange, DataHealthFlags.None, true, $"{exchange} quote stream recovered"), cancellationToken);
         }
 
         _wasHealthyByExchange[exchange] = isHealthy;
-        _wasStaleByExchange[exchange] = isStale;
+        _wasStaleByExchange[exchange] = previousStaleConfirmed;
     }
 
     private async Task GenerateReportsAsync(SummaryPeriod period, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken)
