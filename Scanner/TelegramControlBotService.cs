@@ -16,6 +16,21 @@ namespace ArbiScan.Scanner;
 
 public sealed class TelegramControlBotService : BackgroundService
 {
+    private const string MenuMain = "menu:main";
+    private const string MenuStatus = "menu:status";
+    private const string MenuSettings = "menu:settings";
+    private const string MenuPresets = "menu:presets";
+    private const string MenuUsePreset = "menu:use_preset";
+    private const string MenuSavePreset = "menu:save_preset";
+    private const string MenuUploadPreset = "menu:upload_preset";
+    private const string MenuEditSettings = "menu:edit_settings";
+    private const string MenuEditBasic = "menu:edit_basic";
+    private const string MenuEditThresholds = "menu:edit_thresholds";
+    private const string MenuEditTiming = "menu:edit_timing";
+    private const string MenuEditExport = "menu:edit_export";
+    private const string MenuRestart = "menu:restart";
+    private const string MenuHelp = "menu:help";
+
     private sealed class ConversationState
     {
         public PendingAction Action { get; set; } = PendingAction.None;
@@ -26,24 +41,12 @@ public sealed class TelegramControlBotService : BackgroundService
     private enum PendingAction
     {
         None = 0,
-        AwaitingPresetSelection = 1,
-        AwaitingPresetSaveName = 2,
-        AwaitingPresetUpsertName = 3,
-        AwaitingPresetUpsertPayload = 4,
-        AwaitingSettingPath = 5,
-        AwaitingSettingValue = 6
+        AwaitingPresetSaveName = 1,
+        AwaitingPresetUploadName = 2,
+        AwaitingPresetUploadJson = 3,
+        AwaitingCustomSettingValue = 4,
+        AwaitingCustomSymbol = 5
     }
-
-    private const string MenuStatus = "Статус";
-    private const string MenuCurrentSettings = "Текущие настройки";
-    private const string MenuPresets = "Список пресетов";
-    private const string MenuUsePreset = "Выбрать пресет";
-    private const string MenuSavePreset = "Сохранить текущие настройки";
-    private const string MenuUploadPreset = "Добавить или обновить пресет";
-    private const string MenuEditSetting = "Изменить параметр";
-    private const string MenuRestart = "Перезапустить бота";
-    private const string MenuHelp = "Помощь";
-    private const string MenuBack = "Главное меню";
 
     private readonly TelegramSettings _telegramSettings;
     private readonly ITelegramBotClient? _botClient;
@@ -88,7 +91,7 @@ public sealed class TelegramControlBotService : BackgroundService
                 HandlePollingErrorAsync,
                 new ReceiverOptions
                 {
-                    AllowedUpdates = [UpdateType.Message]
+                    AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery]
                 },
                 stoppingToken);
 
@@ -106,49 +109,109 @@ public sealed class TelegramControlBotService : BackgroundService
 
     private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
     {
-        if (update.Message is not { } message)
+        if (update.CallbackQuery is not null)
         {
+            await HandleCallbackAsync(botClient, update.CallbackQuery, cancellationToken);
             return;
         }
 
-        if (!IsAuthorized(message))
+        if (update.Message is not null)
+        {
+            await HandleMessageAsync(botClient, update.Message, cancellationToken);
+        }
+    }
+
+    private async Task HandleMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
+    {
+        if (!IsAuthorized(message.From?.Id))
         {
             _logger.LogWarning(
-                "Ignored unauthorized Telegram control update. UserId={UserId}, ChatId={ChatId}",
+                "Ignored unauthorized Telegram control message. UserId={UserId}, ChatId={ChatId}",
                 message.From?.Id,
                 message.Chat.Id);
             return;
         }
 
+        var text = message.Text?.Trim() ?? message.Caption?.Trim() ?? string.Empty;
         var state = GetState(message.Chat.Id);
-        var commandText = message.Text ?? message.Caption ?? string.Empty;
-        var isPresetUploadFlow = state.Action == PendingAction.AwaitingPresetUpsertPayload && message.Document is not null;
-        if (string.IsNullOrWhiteSpace(commandText) && !isPresetUploadFlow)
+
+        try
         {
-            await ReplyAsync(botClient, message.Chat.Id, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
+            if (state.Action != PendingAction.None || message.Document is not null)
+            {
+                var response = await HandleConversationMessageAsync(botClient, message, state, text, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(response))
+                {
+                    await ReplyAsync(botClient, message.Chat.Id, response, cancellationToken, CreateMainMenuMarkup());
+                }
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                await SendMainMenuAsync(botClient, message.Chat.Id, cancellationToken);
+                return;
+            }
+
+            if (text.StartsWith('/'))
+            {
+                var response = await HandleSlashCommandAsync(botClient, message, text, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(response))
+                {
+                    await ReplyAsync(botClient, message.Chat.Id, response, cancellationToken, CreateMainMenuMarkup());
+                }
+
+                return;
+            }
+
+            await SendMainMenuAsync(botClient, message.Chat.Id, cancellationToken);
+        }
+        catch (ValidationException ex)
+        {
+            await ReplyAsync(botClient, message.Chat.Id, $"Ошибка валидации: {ex.Message}", cancellationToken, CreateMainMenuMarkup());
+        }
+        catch (FileNotFoundException ex)
+        {
+            await ReplyAsync(botClient, message.Chat.Id, ex.Message, cancellationToken, CreateMainMenuMarkup());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Telegram control message handling failed");
+            await ReplyAsync(botClient, message.Chat.Id, $"Команда не выполнена: {ex.Message}", cancellationToken, CreateMainMenuMarkup());
+        }
+    }
+
+    private async Task HandleCallbackAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery, CancellationToken cancellationToken)
+    {
+        if (!IsAuthorized(callbackQuery.From.Id))
+        {
+            _logger.LogWarning("Ignored unauthorized Telegram callback. UserId={UserId}", callbackQuery.From.Id);
+            return;
+        }
+
+        if (callbackQuery.Message is null || string.IsNullOrWhiteSpace(callbackQuery.Data))
+        {
             return;
         }
 
         try
         {
-            var response = await ExecuteCommandAsync(botClient, message, isPresetUploadFlow ? "__document__" : commandText, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(response))
-            {
-                await ReplyAsync(botClient, message.Chat.Id, response, cancellationToken);
-            }
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+            await HandleCallbackDataAsync(botClient, callbackQuery.Message.Chat.Id, callbackQuery.Data, cancellationToken);
         }
         catch (ValidationException ex)
         {
-            await ReplyAsync(botClient, message.Chat.Id, $"Ошибка валидации: {ex.Message}", cancellationToken);
+            await ReplyAsync(botClient, callbackQuery.Message.Chat.Id, $"Ошибка валидации: {ex.Message}", cancellationToken, CreateMainMenuMarkup());
         }
         catch (FileNotFoundException ex)
         {
-            await ReplyAsync(botClient, message.Chat.Id, ex.Message, cancellationToken);
+            await ReplyAsync(botClient, callbackQuery.Message.Chat.Id, ex.Message, cancellationToken, CreateMainMenuMarkup());
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Telegram control command failed");
-            await ReplyAsync(botClient, message.Chat.Id, $"Команда не выполнена: {ex.Message}", cancellationToken);
+            _logger.LogError(ex, "Telegram callback handling failed");
+            await ReplyAsync(botClient, callbackQuery.Message.Chat.Id, $"Команда не выполнена: {ex.Message}", cancellationToken, CreateMainMenuMarkup());
         }
     }
 
@@ -170,89 +233,264 @@ public sealed class TelegramControlBotService : BackgroundService
         return Task.CompletedTask;
     }
 
-    private async Task<string> ExecuteCommandAsync(
+    private async Task<string> HandleSlashCommandAsync(
         ITelegramBotClient botClient,
         Message message,
-        string rawCommand,
+        string commandText,
         CancellationToken cancellationToken)
     {
-        var chatId = message.Chat.Id;
-        var normalizedText = rawCommand.Trim();
-
-        if (normalizedText.Equals(MenuBack, StringComparison.OrdinalIgnoreCase))
-        {
-            ResetState(chatId);
-            await ReplyAsync(botClient, chatId, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
-            return string.Empty;
-        }
-
-        if (TryHandleMenuAction(normalizedText, out var menuResponse))
-        {
-            ResetState(chatId);
-            return await ExecuteMenuActionAsync(botClient, message, normalizedText, cancellationToken);
-        }
-
-        if (TryHandleConversationInput(normalizedText, message, out var conversationTask))
-        {
-            return await conversationTask(cancellationToken);
-        }
-
-        var parts = rawCommand.Split('\n', 2);
-        var commandLine = parts[0].Trim();
+        var parts = commandText.Split('\n', 2);
+        var commandLine = parts[0];
         var payload = parts.Length > 1 ? parts[1].Trim() : string.Empty;
         var tokens = commandLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var command = tokens[0].Split('@')[0].ToLowerInvariant();
 
         return command switch
         {
-            "/start" => await HandleStartAsync(botClient, message.Chat.Id, cancellationToken),
-            "/help" => await HandleHelpAsync(botClient, message.Chat.Id, cancellationToken),
+            "/start" => await SendMainMenuAsync(botClient, message.Chat.Id, cancellationToken),
+            "/help" => BuildHelpText(),
             "/status" => await BuildStatusTextAsync(cancellationToken),
             "/settings" => await BuildCurrentSettingsTextAsync(cancellationToken),
             "/presets" => await BuildPresetsTextAsync(cancellationToken),
-            "/set" => await HandleSetCommandAsync(tokens, cancellationToken),
-            "/save_preset" => await HandleSavePresetCommandAsync(tokens, cancellationToken),
-            "/use_preset" => await HandleUsePresetCommandAsync(tokens, cancellationToken),
-            "/upsert_preset" => await HandleUpsertPresetCommandAsync(botClient, message, tokens, payload, cancellationToken),
-            "/restart" => await HandleRestartCommandAsync(botClient, message.Chat.Id, cancellationToken),
-            _ => $"Неизвестная команда.\n\n{BuildHelpText()}"
+            "/use_preset" => await HandleLegacyUsePresetAsync(tokens, cancellationToken),
+            "/save_preset" => await HandleLegacySavePresetAsync(tokens, cancellationToken),
+            "/upsert_preset" => await HandleLegacyUpsertPresetAsync(botClient, message, tokens, payload, cancellationToken),
+            "/set" => await HandleLegacySetAsync(tokens, cancellationToken),
+            "/restart" => await HandleRestartAsync(botClient, message.Chat.Id, cancellationToken),
+            _ => "Неизвестная команда. Нажмите /start и работайте через кнопки."
         };
     }
 
-    private async Task<string> ExecuteMenuActionAsync(
+    private async Task<string> HandleConversationMessageAsync(
         ITelegramBotClient botClient,
         Message message,
-        string action,
+        ConversationState state,
+        string text,
         CancellationToken cancellationToken)
     {
-        var chatId = message.Chat.Id;
-        switch (action)
+        switch (state.Action)
         {
-            case MenuStatus:
-                return await BuildStatusTextAsync(cancellationToken);
-            case MenuCurrentSettings:
-                return await BuildCurrentSettingsTextAsync(cancellationToken);
-            case MenuPresets:
-                return await BuildPresetsTextAsync(cancellationToken);
-            case MenuUsePreset:
-                await PromptPresetSelectionAsync(botClient, chatId, cancellationToken);
-                return string.Empty;
-            case MenuSavePreset:
-                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetSaveName });
-                return "Введите имя, под которым сохранить текущий appsettings.json в список пресетов.\nПример: dogeusdt.baseline";
-            case MenuUploadPreset:
-                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetUpsertName });
-                return "Введите имя пресета, который нужно добавить или обновить.";
-            case MenuEditSetting:
-                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingSettingPath });
-                return "Введите путь к параметру.\nПримеры:\nSymbol\nTestNotionalsUsd\nStorage.RootPath\nEntryThresholdUsd";
-            case MenuRestart:
-                return await HandleRestartCommandAsync(botClient, chatId, cancellationToken);
-            case MenuHelp:
-                return BuildHelpText();
+            case PendingAction.AwaitingPresetSaveName:
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    throw new ValidationException("Введите имя пресета.");
+                }
+
+                var presetName = await _catalog.SaveCurrentAsPresetAsync(text, cancellationToken);
+                ResetState(message.Chat.Id);
+                return $"Текущие настройки сохранены как пресет `{presetName}`.";
+            }
+
+            case PendingAction.AwaitingPresetUploadName:
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    throw new ValidationException("Введите имя пресета.");
+                }
+
+                SetState(message.Chat.Id, new ConversationState
+                {
+                    Action = PendingAction.AwaitingPresetUploadJson,
+                    DraftPresetName = text
+                });
+
+                return "Имя принято. Теперь пришлите JSON текстом или `.json` файлом.";
+            }
+
+            case PendingAction.AwaitingPresetUploadJson:
+            {
+                var presetName = state.DraftPresetName
+                    ?? throw new ValidationException("Не удалось определить имя пресета.");
+
+                string json;
+                if (message.Document is not null)
+                {
+                    json = await DownloadDocumentTextAsync(botClient, message.Document, cancellationToken);
+                }
+                else if (!string.IsNullOrWhiteSpace(text))
+                {
+                    json = text;
+                }
+                else
+                {
+                    throw new ValidationException("Нужен JSON текст или `.json` файл.");
+                }
+
+                presetName = await _catalog.UpsertPresetAsync(presetName, json, cancellationToken);
+                ResetState(message.Chat.Id);
+                return $"Пресет `{presetName}` сохранён.";
+            }
+
+            case PendingAction.AwaitingCustomSettingValue:
+            {
+                var path = state.DraftSettingPath
+                    ?? throw new ValidationException("Не удалось определить параметр.");
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    throw new ValidationException("Отправьте новое значение.");
+                }
+
+                await ApplySettingChangeAsync(path, text, cancellationToken);
+                ResetState(message.Chat.Id);
+                return $"Параметр `{path}` обновлён. Если нужно применить его сразу, нажмите кнопку «Перезапустить бота» в меню.";
+            }
+
+            case PendingAction.AwaitingCustomSymbol:
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    throw new ValidationException("Введите символ, например DOGEUSDT.");
+                }
+
+                await ApplySymbolAsync(text, cancellationToken);
+                ResetState(message.Chat.Id);
+                return $"Символ обновлён на `{text.ToUpperInvariant()}`. Если нужно применить сразу, нажмите «Перезапустить бота».";
+            }
+
             default:
-                return BuildHelpText();
+                return await SendMainMenuAsync(botClient, message.Chat.Id, cancellationToken);
         }
+    }
+
+    private async Task HandleCallbackDataAsync(
+        ITelegramBotClient botClient,
+        long chatId,
+        string data,
+        CancellationToken cancellationToken)
+    {
+        if (data == MenuMain)
+        {
+            await SendMainMenuAsync(botClient, chatId, cancellationToken);
+            return;
+        }
+
+        if (data == MenuStatus)
+        {
+            await ReplyAsync(botClient, chatId, await BuildStatusTextAsync(cancellationToken), cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data == MenuSettings)
+        {
+            await ReplyAsync(botClient, chatId, await BuildCurrentSettingsTextAsync(cancellationToken), cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data == MenuPresets)
+        {
+            await ReplyAsync(botClient, chatId, await BuildPresetsTextAsync(cancellationToken), cancellationToken, CreatePresetsMenuMarkup());
+            return;
+        }
+
+        if (data == MenuUsePreset)
+        {
+            await ReplyAsync(botClient, chatId, BuildPresetSelectionText(), cancellationToken, CreatePresetSelectionMarkup());
+            return;
+        }
+
+        if (data == MenuSavePreset)
+        {
+            SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetSaveName });
+            await ReplyAsync(botClient, chatId, "Введите имя, под которым сохранить текущий appsettings.json в список пресетов.", cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data == MenuUploadPreset)
+        {
+            SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetUploadName });
+            await ReplyAsync(botClient, chatId, "Введите имя пресета, который нужно добавить или обновить.", cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data == MenuEditSettings)
+        {
+            await ReplyAsync(botClient, chatId, "Выберите группу параметров.", cancellationToken, CreateSettingsSectionsMarkup());
+            return;
+        }
+
+        if (data == MenuEditBasic)
+        {
+            await ReplyAsync(botClient, chatId, await BuildBasicSettingsTextAsync(cancellationToken), cancellationToken, CreateBasicSettingsMarkup());
+            return;
+        }
+
+        if (data == MenuEditThresholds)
+        {
+            await ReplyAsync(botClient, chatId, await BuildThresholdSettingsTextAsync(cancellationToken), cancellationToken, CreateThresholdSettingsMarkup());
+            return;
+        }
+
+        if (data == MenuEditTiming)
+        {
+            await ReplyAsync(botClient, chatId, await BuildTimingSettingsTextAsync(cancellationToken), cancellationToken, CreateTimingSettingsMarkup());
+            return;
+        }
+
+        if (data == MenuEditExport)
+        {
+            await ReplyAsync(botClient, chatId, await BuildExportSettingsTextAsync(cancellationToken), cancellationToken, CreateExportSettingsMarkup());
+            return;
+        }
+
+        if (data == MenuRestart)
+        {
+            await HandleRestartAsync(botClient, chatId, cancellationToken);
+            return;
+        }
+
+        if (data == MenuHelp)
+        {
+            await ReplyAsync(botClient, chatId, BuildHelpText(), cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data.StartsWith("preset:select:", StringComparison.Ordinal))
+        {
+            var presetName = data["preset:select:".Length..];
+            presetName = await _catalog.ActivatePresetAsync(presetName, cancellationToken);
+            await ReplyAsync(botClient, chatId, $"Пресет `{presetName}` выбран. Если нужно применить его сразу, нажмите «Перезапустить бота».", cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data.StartsWith("setting:quick:", StringComparison.Ordinal))
+        {
+            var payload = data["setting:quick:".Length..];
+            var separatorIndex = payload.IndexOf(':', StringComparison.Ordinal);
+            if (separatorIndex <= 0)
+            {
+                throw new ValidationException("Некорректное значение кнопки настройки.");
+            }
+
+            var path = payload[..separatorIndex];
+            var value = payload[(separatorIndex + 1)..];
+            await ApplyQuickSettingChangeAsync(path, value, cancellationToken);
+            await ReplyAsync(botClient, chatId, $"Параметр `{path}` обновлён. Если нужно применить его сразу, нажмите «Перезапустить бота».", cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        if (data.StartsWith("setting:custom:", StringComparison.Ordinal))
+        {
+            var path = data["setting:custom:".Length..];
+            if (string.Equals(path, "Symbol", StringComparison.Ordinal))
+            {
+                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingCustomSymbol });
+                await ReplyAsync(botClient, chatId, "Введите символ вручную, например DOGEUSDT.", cancellationToken, CreateMainMenuMarkup());
+                return;
+            }
+
+            SetState(chatId, new ConversationState
+            {
+                Action = PendingAction.AwaitingCustomSettingValue,
+                DraftSettingPath = path
+            });
+
+            await ReplyAsync(botClient, chatId, BuildCustomValuePrompt(path), cancellationToken, CreateMainMenuMarkup());
+            return;
+        }
+
+        throw new ValidationException("Неизвестное действие кнопки.");
     }
 
     private async Task<string> BuildStatusTextAsync(CancellationToken cancellationToken)
@@ -291,48 +529,72 @@ public sealed class TelegramControlBotService : BackgroundService
         var names = _catalog.ListPresetNames();
         if (names.Count == 0)
         {
-            return Task.FromResult("Список preset пуст. Каталог: /srv/ArbiScan/config/appsettings");
+            return Task.FromResult("Список пресетов пуст. Каталог: /srv/ArbiScan/config/appsettings");
         }
 
         return Task.FromResult(
-            "Доступные preset:\n" +
+            "Доступные пресеты:\n" +
             string.Join('\n', names.Select(x => $"- {x}")));
     }
 
-    private async Task<string> HandleSetCommandAsync(string[] tokens, CancellationToken cancellationToken)
+    private async Task<string> BuildBasicSettingsTextAsync(CancellationToken cancellationToken)
     {
-        if (tokens.Length < 3)
-        {
-            throw new ValidationException("Использование: /set <путь> <json-значение>. Пример: /set Symbol \"DOGEUSDT\"");
-        }
-
-        await _catalog.PatchCurrentSettingsAsync(tokens[1], tokens[2], cancellationToken);
-        return $"Настройка `{tokens[1]}` обновлена. Чтобы применить изменения к работающему сканеру, выполните /restart.";
+        var settings = await LoadCurrentSettingsAsync(cancellationToken);
+        return $"Основные настройки:\n" +
+               $"Symbol = {settings.Symbol}\n" +
+               $"BaseAsset = {settings.BaseAsset}\n" +
+               $"QuoteAsset = {settings.QuoteAsset}\n" +
+               $"TestNotionalsUsd = [{string.Join(", ", settings.TestNotionalsUsd.Select(x => x.ToString("0.########")))}]";
     }
 
-    private async Task<string> HandleSavePresetCommandAsync(string[] tokens, CancellationToken cancellationToken)
+    private async Task<string> BuildThresholdSettingsTextAsync(CancellationToken cancellationToken)
+    {
+        var settings = await LoadCurrentSettingsAsync(cancellationToken);
+        return $"Пороговые настройки:\n" +
+               $"SafetyBufferBps = {settings.SafetyBufferBps}\n" +
+               $"EntryThresholdUsd = {settings.EntryThresholdUsd}\n" +
+               $"EntryThresholdBps = {settings.EntryThresholdBps}";
+    }
+
+    private async Task<string> BuildTimingSettingsTextAsync(CancellationToken cancellationToken)
+    {
+        var settings = await LoadCurrentSettingsAsync(cancellationToken);
+        return $"Тайминги:\n" +
+               $"ScanIntervalMs = {settings.ScanIntervalMs}\n" +
+               $"QuoteStalenessThresholdMs = {settings.QuoteStalenessThresholdMs}\n" +
+               $"CumulativeSummaryIntervalSeconds = {settings.CumulativeSummaryIntervalSeconds}";
+    }
+
+    private async Task<string> BuildExportSettingsTextAsync(CancellationToken cancellationToken)
+    {
+        var settings = await LoadCurrentSettingsAsync(cancellationToken);
+        return $"Экспорт raw signals:\n" +
+               $"RawSignalJsonExportMode = {settings.RawSignalJsonExportMode}";
+    }
+
+    private async Task<string> HandleLegacyUsePresetAsync(string[] tokens, CancellationToken cancellationToken)
     {
         if (tokens.Length < 2)
         {
-            throw new ValidationException("Использование: /save_preset <имя>");
-        }
-
-        var presetName = await _catalog.SaveCurrentAsPresetAsync(tokens[1], cancellationToken);
-        return $"Текущий appsettings сохранён как preset `{presetName}`.";
-    }
-
-    private async Task<string> HandleUsePresetCommandAsync(string[] tokens, CancellationToken cancellationToken)
-    {
-        if (tokens.Length < 2)
-        {
-            throw new ValidationException("Использование: /use_preset <имя>");
+            throw new ValidationException("Используйте /start -> «Выбрать пресет» или укажите имя: /use_preset <имя>.");
         }
 
         var presetName = await _catalog.ActivatePresetAsync(tokens[1], cancellationToken);
-        return $"Preset `{presetName}` выбран и записан в текущий appsettings.json. Чтобы применить его в работающем сканере, выполните /restart.";
+        return $"Пресет `{presetName}` выбран.";
     }
 
-    private async Task<string> HandleUpsertPresetCommandAsync(
+    private async Task<string> HandleLegacySavePresetAsync(string[] tokens, CancellationToken cancellationToken)
+    {
+        if (tokens.Length < 2)
+        {
+            throw new ValidationException("Используйте /start -> «Сохранить текущие настройки» или укажите имя: /save_preset <имя>.");
+        }
+
+        var presetName = await _catalog.SaveCurrentAsPresetAsync(tokens[1], cancellationToken);
+        return $"Текущие настройки сохранены как `{presetName}`.";
+    }
+
+    private async Task<string> HandleLegacyUpsertPresetAsync(
         ITelegramBotClient botClient,
         Message message,
         string[] tokens,
@@ -341,7 +603,7 @@ public sealed class TelegramControlBotService : BackgroundService
     {
         if (tokens.Length < 2)
         {
-            throw new ValidationException("Использование: /upsert_preset <имя> [json]. Можно прислать JSON текстом после перевода строки или приложить `.json` документ с этой подписью.");
+            throw new ValidationException("Используйте /start -> «Добавить или обновить пресет» или укажите имя: /upsert_preset <имя>.");
         }
 
         string json;
@@ -355,14 +617,25 @@ public sealed class TelegramControlBotService : BackgroundService
         }
         else
         {
-            throw new ValidationException("Нужен JSON payload: либо в тексте команды после перевода строки, либо как приложенный `.json` документ.");
+            throw new ValidationException("Нужен JSON текст или `.json` файл.");
         }
 
         var presetName = await _catalog.UpsertPresetAsync(tokens[1], json, cancellationToken);
-        return $"Preset `{presetName}` добавлен или обновлён в каталоге `/srv/ArbiScan/config/appsettings`.";
+        return $"Пресет `{presetName}` сохранён.";
     }
 
-    private async Task<string> HandleRestartCommandAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    private async Task<string> HandleLegacySetAsync(string[] tokens, CancellationToken cancellationToken)
+    {
+        if (tokens.Length < 3)
+        {
+            throw new ValidationException("Используйте /start -> «Изменить параметр» или /set <путь> <json-значение>.");
+        }
+
+        await ApplySettingChangeAsync(tokens[1], tokens[2], cancellationToken);
+        return $"Параметр `{tokens[1]}` обновлён.";
+    }
+
+    private async Task<string> HandleRestartAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
     {
         _ = Task.Run(
             async () =>
@@ -379,44 +652,53 @@ public sealed class TelegramControlBotService : BackgroundService
             },
             CancellationToken.None);
 
-        await ReplyAsync(botClient, chatId, "Перезапуск запрошен. Контейнер завершит процесс и поднимется снова с текущим appsettings.json.", cancellationToken);
+        await ReplyAsync(botClient, chatId, "Перезапуск запрошен. Контейнер завершит процесс и поднимется снова с текущим appsettings.json.", cancellationToken, CreateMainMenuMarkup());
         return string.Empty;
     }
 
-    private async Task<string> HandleStartAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    private async Task<string> SendMainMenuAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
     {
         ResetState(chatId);
-        await ReplyAsync(botClient, chatId, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
+        await ReplyAsync(botClient, chatId, BuildStartText(), cancellationToken, CreateMainMenuMarkup());
         return string.Empty;
     }
 
-    private async Task<string> HandleHelpAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    private async Task<AppSettings> LoadCurrentSettingsAsync(CancellationToken cancellationToken) =>
+        SettingsValidator.ParseAndValidateAppSettingsJson(await _catalog.GetCurrentSettingsAsync(cancellationToken));
+
+    private async Task ApplyQuickSettingChangeAsync(string path, string valueToken, CancellationToken cancellationToken)
     {
-        await ReplyAsync(botClient, chatId, BuildHelpText(), cancellationToken, CreateMainMenuKeyboard());
-        return string.Empty;
+        switch (path)
+        {
+            case "Symbol":
+                await ApplySymbolAsync(valueToken, cancellationToken);
+                return;
+            case "TestNotionalsUsd":
+                await ApplySettingChangeAsync(path, $"[{string.Join(",", valueToken.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))}]", cancellationToken);
+                return;
+            default:
+                await ApplySettingChangeAsync(path, valueToken, cancellationToken);
+                return;
+        }
     }
 
-    private async Task PromptPresetSelectionAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    private async Task ApplySettingChangeAsync(string path, string jsonValue, CancellationToken cancellationToken)
     {
-        var presetNames = _catalog.ListPresetNames();
-        SetState(chatId, new ConversationState
-        {
-            Action = PendingAction.AwaitingPresetSelection
-        });
+        await _catalog.PatchCurrentSettingsAsync(path, jsonValue, cancellationToken);
+    }
 
-        if (presetNames.Count == 0)
+    private async Task ApplySymbolAsync(string symbol, CancellationToken cancellationToken)
+    {
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        if (!normalizedSymbol.EndsWith("USDT", StringComparison.Ordinal))
         {
-            await ReplyAsync(botClient, chatId, "Список пресетов пуст. Сначала сохраните текущие настройки или загрузите новый пресет.", cancellationToken, CreateMainMenuKeyboard());
-            ResetState(chatId);
-            return;
+            throw new ValidationException("Сейчас поддерживаются символы формата <BASE>USDT, например XRPUSDT.");
         }
 
-        await ReplyAsync(
-            botClient,
-            chatId,
-            "Выберите пресет кнопкой ниже или отправьте его имя текстом.",
-            cancellationToken,
-            CreatePresetKeyboard(presetNames));
+        var baseAsset = normalizedSymbol[..^4];
+        await _catalog.PatchCurrentSettingsAsync("Symbol", $"\"{normalizedSymbol}\"", cancellationToken);
+        await _catalog.PatchCurrentSettingsAsync("BaseAsset", $"\"{baseAsset}\"", cancellationToken);
+        await _catalog.PatchCurrentSettingsAsync("QuoteAsset", "\"USDT\"", cancellationToken);
     }
 
     private async Task<string> DownloadDocumentTextAsync(ITelegramBotClient botClient, Document document, CancellationToken cancellationToken)
@@ -430,126 +712,9 @@ public sealed class TelegramControlBotService : BackgroundService
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
-    private bool IsAuthorized(Message message) =>
+    private bool IsAuthorized(long? userId) =>
         _telegramSettings.Enabled &&
-        message.From?.Id == _telegramSettings.AllowedUserId;
-
-    private bool TryHandleMenuAction(string text, out string menuAction)
-    {
-        var knownActions = new[]
-        {
-            MenuStatus,
-            MenuCurrentSettings,
-            MenuPresets,
-            MenuUsePreset,
-            MenuSavePreset,
-            MenuUploadPreset,
-            MenuEditSetting,
-            MenuRestart,
-            MenuHelp
-        };
-
-        menuAction = knownActions.FirstOrDefault(x => x.Equals(text, StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
-        return !string.IsNullOrWhiteSpace(menuAction);
-    }
-
-    private bool TryHandleConversationInput(
-        string normalizedText,
-        Message message,
-        out Func<CancellationToken, Task<string>> handler)
-    {
-        var state = GetState(message.Chat.Id);
-        handler = _ => Task.FromResult(string.Empty);
-
-        switch (state.Action)
-        {
-            case PendingAction.AwaitingPresetSelection:
-                handler = async cancellationToken =>
-                {
-                    var presetName = await _catalog.ActivatePresetAsync(normalizedText, cancellationToken);
-                    ResetState(message.Chat.Id);
-                    return $"Пресет `{presetName}` выбран. Теперь можно нажать «Перезапустить бота», чтобы он стартовал уже с этими настройками.";
-                };
-                return true;
-
-            case PendingAction.AwaitingPresetSaveName:
-                handler = async cancellationToken =>
-                {
-                    var presetName = await _catalog.SaveCurrentAsPresetAsync(normalizedText, cancellationToken);
-                    ResetState(message.Chat.Id);
-                    return $"Текущие настройки сохранены как пресет `{presetName}`.";
-                };
-                return true;
-
-            case PendingAction.AwaitingPresetUpsertName:
-                handler = cancellationToken =>
-                {
-                    SetState(message.Chat.Id, new ConversationState
-                    {
-                        Action = PendingAction.AwaitingPresetUpsertPayload,
-                        DraftPresetName = normalizedText
-                    });
-
-                    return Task.FromResult(
-                        "Теперь пришлите JSON пресета.\nМожно просто вставить JSON текстом следующим сообщением или отправить `.json` файлом.");
-                };
-                return true;
-
-            case PendingAction.AwaitingPresetUpsertPayload:
-                handler = async cancellationToken =>
-                {
-                    var payload = message.Text ?? message.Caption;
-                    string json;
-                    if (message.Document is not null)
-                    {
-                        json = await DownloadDocumentTextAsync(_botClient!, message.Document, cancellationToken);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(payload))
-                    {
-                        json = payload;
-                    }
-                    else
-                    {
-                        throw new ValidationException("Нужен JSON текст или `.json` файл.");
-                    }
-
-                    var presetName = state.DraftPresetName
-                        ?? throw new ValidationException("Не удалось определить имя пресета.");
-                    presetName = await _catalog.UpsertPresetAsync(presetName, json, cancellationToken);
-                    ResetState(message.Chat.Id);
-                    return $"Пресет `{presetName}` сохранён в список.";
-                };
-                return true;
-
-            case PendingAction.AwaitingSettingPath:
-                handler = cancellationToken =>
-                {
-                    SetState(message.Chat.Id, new ConversationState
-                    {
-                        Action = PendingAction.AwaitingSettingValue,
-                        DraftSettingPath = normalizedText
-                    });
-
-                    return Task.FromResult(
-                        $"Путь `{normalizedText}` принят.\nТеперь отправьте новое значение в JSON-формате.\nПримеры:\n\"DOGEUSDT\"\n25\n[10,20,50]\n0.5");
-                };
-                return true;
-
-            case PendingAction.AwaitingSettingValue:
-                handler = async cancellationToken =>
-                {
-                    var path = state.DraftSettingPath
-                        ?? throw new ValidationException("Не удалось определить путь к настройке.");
-                    await _catalog.PatchCurrentSettingsAsync(path, normalizedText, cancellationToken);
-                    ResetState(message.Chat.Id);
-                    return $"Параметр `{path}` обновлён. Если настройка должна сразу примениться к сканеру, нажмите «Перезапустить бота».";
-                };
-                return true;
-
-            default:
-                return false;
-        }
-    }
+        userId == _telegramSettings.AllowedUserId;
 
     private ConversationState GetState(long chatId)
     {
@@ -591,75 +756,253 @@ public sealed class TelegramControlBotService : BackgroundService
             cancellationToken: cancellationToken);
     }
 
+    private static InlineKeyboardMarkup CreateMainMenuMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Статус", MenuStatus),
+                InlineKeyboardButton.WithCallbackData("Текущие настройки", MenuSettings)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Список пресетов", MenuPresets),
+                InlineKeyboardButton.WithCallbackData("Выбрать пресет", MenuUsePreset)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Сохранить текущие настройки", MenuSavePreset)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Добавить или обновить пресет", MenuUploadPreset)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Изменить параметры", MenuEditSettings)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Перезапустить бота", MenuRestart),
+                InlineKeyboardButton.WithCallbackData("Помощь", MenuHelp)
+            }
+        });
+
+    private static InlineKeyboardMarkup CreatePresetsMenuMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Выбрать пресет", MenuUsePreset),
+                InlineKeyboardButton.WithCallbackData("Назад", MenuMain)
+            }
+        });
+
+    private InlineKeyboardMarkup CreatePresetSelectionMarkup()
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+        foreach (var chunk in _catalog.ListPresetNames().Chunk(2))
+        {
+            rows.Add(chunk
+                .Select(x => InlineKeyboardButton.WithCallbackData(x, $"preset:select:{x}"))
+                .ToArray());
+        }
+
+        rows.Add(
+        [
+            InlineKeyboardButton.WithCallbackData("Назад", MenuMain)
+        ]);
+
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    private static InlineKeyboardMarkup CreateSettingsSectionsMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Основные", MenuEditBasic),
+                InlineKeyboardButton.WithCallbackData("Пороги", MenuEditThresholds)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Тайминги", MenuEditTiming),
+                InlineKeyboardButton.WithCallbackData("Экспорт", MenuEditExport)
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Назад", MenuMain)
+            }
+        });
+
+    private static InlineKeyboardMarkup CreateBasicSettingsMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Символ XRPUSDT", "setting:quick:Symbol:XRPUSDT"),
+                InlineKeyboardButton.WithCallbackData("Символ DOGEUSDT", "setting:quick:Symbol:DOGEUSDT")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Символ TRXUSDT", "setting:quick:Symbol:TRXUSDT"),
+                InlineKeyboardButton.WithCallbackData("Символ вручную", "setting:custom:Symbol")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Notionals 10/20/50", "setting:quick:TestNotionalsUsd:10-20-50"),
+                InlineKeyboardButton.WithCallbackData("Notionals 10/20/50/100", "setting:quick:TestNotionalsUsd:10-20-50-100")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Notionals 50/100", "setting:quick:TestNotionalsUsd:50-100"),
+                InlineKeyboardButton.WithCallbackData("Notionals вручную", "setting:custom:TestNotionalsUsd")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Назад", MenuEditSettings)
+            }
+        });
+
+    private static InlineKeyboardMarkup CreateThresholdSettingsMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Buffer 1", "setting:quick:SafetyBufferBps:1"),
+                InlineKeyboardButton.WithCallbackData("Buffer 2", "setting:quick:SafetyBufferBps:2"),
+                InlineKeyboardButton.WithCallbackData("Buffer 5", "setting:quick:SafetyBufferBps:5")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Entry USD 0", "setting:quick:EntryThresholdUsd:0"),
+                InlineKeyboardButton.WithCallbackData("Entry USD 0.01", "setting:quick:EntryThresholdUsd:0.01"),
+                InlineKeyboardButton.WithCallbackData("Entry USD 0.05", "setting:quick:EntryThresholdUsd:0.05")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Entry BPS 0", "setting:quick:EntryThresholdBps:0"),
+                InlineKeyboardButton.WithCallbackData("Entry BPS 1", "setting:quick:EntryThresholdBps:1"),
+                InlineKeyboardButton.WithCallbackData("Entry BPS 2", "setting:quick:EntryThresholdBps:2")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Buffer вручную", "setting:custom:SafetyBufferBps"),
+                InlineKeyboardButton.WithCallbackData("Entry USD вручную", "setting:custom:EntryThresholdUsd")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Entry BPS вручную", "setting:custom:EntryThresholdBps"),
+                InlineKeyboardButton.WithCallbackData("Назад", MenuEditSettings)
+            }
+        });
+
+    private static InlineKeyboardMarkup CreateTimingSettingsMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Scan 100 ms", "setting:quick:ScanIntervalMs:100"),
+                InlineKeyboardButton.WithCallbackData("Scan 250 ms", "setting:quick:ScanIntervalMs:250"),
+                InlineKeyboardButton.WithCallbackData("Scan 500 ms", "setting:quick:ScanIntervalMs:500")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Stale 2000 ms", "setting:quick:QuoteStalenessThresholdMs:2000"),
+                InlineKeyboardButton.WithCallbackData("Stale 3000 ms", "setting:quick:QuoteStalenessThresholdMs:3000"),
+                InlineKeyboardButton.WithCallbackData("Stale 5000 ms", "setting:quick:QuoteStalenessThresholdMs:5000")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Summary 1800 s", "setting:quick:CumulativeSummaryIntervalSeconds:1800"),
+                InlineKeyboardButton.WithCallbackData("Summary 3600 s", "setting:quick:CumulativeSummaryIntervalSeconds:3600"),
+                InlineKeyboardButton.WithCallbackData("Summary 14400 s", "setting:quick:CumulativeSummaryIntervalSeconds:14400")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Scan вручную", "setting:custom:ScanIntervalMs"),
+                InlineKeyboardButton.WithCallbackData("Stale вручную", "setting:custom:QuoteStalenessThresholdMs")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Summary вручную", "setting:custom:CumulativeSummaryIntervalSeconds"),
+                InlineKeyboardButton.WithCallbackData("Назад", MenuEditSettings)
+            }
+        });
+
+    private static InlineKeyboardMarkup CreateExportSettingsMarkup() =>
+        new(new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("All", "setting:quick:RawSignalJsonExportMode:\"All\""),
+                InlineKeyboardButton.WithCallbackData("PositiveOnly", "setting:quick:RawSignalJsonExportMode:\"PositiveOnly\"")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("FeePositiveAndAbove", "setting:quick:RawSignalJsonExportMode:\"FeePositiveAndAbove\"")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("NetPositiveAndAbove", "setting:quick:RawSignalJsonExportMode:\"NetPositiveAndAbove\"")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("EntryQualifiedOnly", "setting:quick:RawSignalJsonExportMode:\"EntryQualifiedOnly\""),
+                InlineKeyboardButton.WithCallbackData("None", "setting:quick:RawSignalJsonExportMode:\"None\"")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Назад", MenuEditSettings)
+            }
+        });
+
     private static string BuildStartText() =>
         """
         Панель управления ArbiScan.
 
-        Что можно делать из бота:
-        - посмотреть текущий статус сканера
-        - посмотреть активные настройки
-        - выбрать пресет настроек из списка
-        - сохранить текущие настройки как новый пресет
-        - добавить или обновить пресет через JSON
-        - точечно изменить отдельный параметр
+        Здесь можно:
+        - посмотреть статус сканера
+        - посмотреть текущие настройки
+        - выбрать пресет из списка
+        - сохранить текущие настройки как пресет
+        - загрузить новый пресет из JSON
+        - менять основные параметры кнопками
         - перезапустить бота с новыми настройками
-
-        Нажмите кнопку ниже.
         """;
 
     private static string BuildHelpText() =>
         """
-        Работа через меню:
-        - «Статус» показывает, жив ли сканер и какой сейчас лучший сетап
-        - «Текущие настройки» показывает активный appsettings.json
-        - «Список пресетов» показывает, что лежит в /srv/ArbiScan/config/appsettings
-        - «Выбрать пресет» переключает текущий appsettings.json на один из пресетов
-        - «Сохранить текущие настройки» кладёт текущий appsettings.json в список пресетов
-        - «Добавить или обновить пресет» принимает JSON текстом или `.json` файлом
-        - «Изменить параметр» пошагово меняет один конкретный параметр
-        - «Перезапустить бота» перезапускает процесс и применяет текущий appsettings.json
+        Как работать:
+        1. Нажмите «Выбрать пресет», если хотите переключиться на готовый набор настроек.
+        2. Нажмите «Изменить параметры», если хотите поменять отдельные значения.
+        3. После изменений нажмите «Перезапустить бота», чтобы сканер перечитал текущий appsettings.json.
 
-        Для опытного режима старые команды тоже работают:
-        /status
-        /settings
-        /presets
-        /set <путь> <json-значение>
-        /save_preset <имя>
-        /use_preset <имя>
-        /upsert_preset <имя>
-        /restart
+        Для сложных значений бот сам попросит ввести только новое значение.
+        Названия параметров вручную писать больше не нужно.
+
+        Старые slash-команды оставлены как резервный режим, но основной интерфейс теперь через кнопки.
         """;
 
-    private static ReplyKeyboardMarkup CreateMainMenuKeyboard() =>
-        new(new[]
+    private static string BuildPresetSelectionText() =>
+        """
+        Выберите пресет из списка кнопками ниже.
+        После выбора он будет записан в текущий appsettings.json.
+        Затем при необходимости нажмите «Перезапустить бота».
+        """;
+
+    private static string BuildCustomValuePrompt(string path) =>
+        path switch
         {
-            new KeyboardButton[] { MenuStatus, MenuCurrentSettings },
-            new KeyboardButton[] { MenuPresets, MenuUsePreset },
-            new KeyboardButton[] { MenuSavePreset, MenuUploadPreset },
-            new KeyboardButton[] { MenuEditSetting, MenuRestart },
-            new KeyboardButton[] { MenuHelp }
-        })
-        {
-            ResizeKeyboard = true,
-            IsPersistent = true
+            "TestNotionalsUsd" => "Отправьте массив в JSON-формате, например:\n[10,20,50]",
+            "ScanIntervalMs" => "Отправьте новое число, например:\n250",
+            "QuoteStalenessThresholdMs" => "Отправьте новое число, например:\n3000",
+            "CumulativeSummaryIntervalSeconds" => "Отправьте новое число, например:\n3600",
+            "SafetyBufferBps" => "Отправьте новое число, например:\n2",
+            "EntryThresholdUsd" => "Отправьте новое число, например:\n0.01",
+            "EntryThresholdBps" => "Отправьте новое число, например:\n1",
+            _ => $"Отправьте новое значение для `{path}` в JSON-формате."
         };
-
-    private static ReplyKeyboardMarkup CreatePresetKeyboard(IReadOnlyList<string> presetNames)
-    {
-        var rows = new List<KeyboardButton[]>();
-        foreach (var chunk in presetNames.Chunk(2))
-        {
-            rows.Add(chunk.Select(x => new KeyboardButton(x)).ToArray());
-        }
-
-        rows.Add([new KeyboardButton(MenuBack)]);
-
-        return new ReplyKeyboardMarkup(rows)
-        {
-            ResizeKeyboard = true,
-            IsPersistent = true
-        };
-    }
 
     private static string FormatDirection(ArbitrageDirection direction) =>
         direction switch
