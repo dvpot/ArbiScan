@@ -10,17 +10,49 @@ using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace ArbiScan.Scanner;
 
 public sealed class TelegramControlBotService : BackgroundService
 {
+    private sealed class ConversationState
+    {
+        public PendingAction Action { get; set; } = PendingAction.None;
+        public string? DraftPresetName { get; set; }
+        public string? DraftSettingPath { get; set; }
+    }
+
+    private enum PendingAction
+    {
+        None = 0,
+        AwaitingPresetSelection = 1,
+        AwaitingPresetSaveName = 2,
+        AwaitingPresetUpsertName = 3,
+        AwaitingPresetUpsertPayload = 4,
+        AwaitingSettingPath = 5,
+        AwaitingSettingValue = 6
+    }
+
+    private const string MenuStatus = "Статус";
+    private const string MenuCurrentSettings = "Текущие настройки";
+    private const string MenuPresets = "Список пресетов";
+    private const string MenuUsePreset = "Выбрать пресет";
+    private const string MenuSavePreset = "Сохранить текущие настройки";
+    private const string MenuUploadPreset = "Добавить или обновить пресет";
+    private const string MenuEditSetting = "Изменить параметр";
+    private const string MenuRestart = "Перезапустить бота";
+    private const string MenuHelp = "Помощь";
+    private const string MenuBack = "Главное меню";
+
     private readonly TelegramSettings _telegramSettings;
     private readonly ITelegramBotClient? _botClient;
     private readonly AppSettingsCatalog _catalog;
     private readonly RuntimeStateTracker _runtimeStateTracker;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<TelegramControlBotService> _logger;
+    private readonly Dictionary<long, ConversationState> _statesByChat = new();
+    private readonly Lock _statesLock = new();
 
     public TelegramControlBotService(
         TelegramSettings telegramSettings,
@@ -88,16 +120,18 @@ public sealed class TelegramControlBotService : BackgroundService
             return;
         }
 
-        var commandText = message.Text ?? message.Caption;
-        if (string.IsNullOrWhiteSpace(commandText))
+        var state = GetState(message.Chat.Id);
+        var commandText = message.Text ?? message.Caption ?? string.Empty;
+        var isPresetUploadFlow = state.Action == PendingAction.AwaitingPresetUpsertPayload && message.Document is not null;
+        if (string.IsNullOrWhiteSpace(commandText) && !isPresetUploadFlow)
         {
-            await ReplyAsync(botClient, message.Chat.Id, BuildHelpText(), cancellationToken);
+            await ReplyAsync(botClient, message.Chat.Id, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
             return;
         }
 
         try
         {
-            var response = await ExecuteCommandAsync(botClient, message, commandText, cancellationToken);
+            var response = await ExecuteCommandAsync(botClient, message, isPresetUploadFlow ? "__document__" : commandText, cancellationToken);
             if (!string.IsNullOrWhiteSpace(response))
             {
                 await ReplyAsync(botClient, message.Chat.Id, response, cancellationToken);
@@ -142,6 +176,27 @@ public sealed class TelegramControlBotService : BackgroundService
         string rawCommand,
         CancellationToken cancellationToken)
     {
+        var chatId = message.Chat.Id;
+        var normalizedText = rawCommand.Trim();
+
+        if (normalizedText.Equals(MenuBack, StringComparison.OrdinalIgnoreCase))
+        {
+            ResetState(chatId);
+            await ReplyAsync(botClient, chatId, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
+            return string.Empty;
+        }
+
+        if (TryHandleMenuAction(normalizedText, out var menuResponse))
+        {
+            ResetState(chatId);
+            return await ExecuteMenuActionAsync(botClient, message, normalizedText, cancellationToken);
+        }
+
+        if (TryHandleConversationInput(normalizedText, message, out var conversationTask))
+        {
+            return await conversationTask(cancellationToken);
+        }
+
         var parts = rawCommand.Split('\n', 2);
         var commandLine = parts[0].Trim();
         var payload = parts.Length > 1 ? parts[1].Trim() : string.Empty;
@@ -150,7 +205,8 @@ public sealed class TelegramControlBotService : BackgroundService
 
         return command switch
         {
-            "/start" or "/help" => BuildHelpText(),
+            "/start" => await HandleStartAsync(botClient, message.Chat.Id, cancellationToken),
+            "/help" => await HandleHelpAsync(botClient, message.Chat.Id, cancellationToken),
             "/status" => await BuildStatusTextAsync(cancellationToken),
             "/settings" => await BuildCurrentSettingsTextAsync(cancellationToken),
             "/presets" => await BuildPresetsTextAsync(cancellationToken),
@@ -163,6 +219,42 @@ public sealed class TelegramControlBotService : BackgroundService
         };
     }
 
+    private async Task<string> ExecuteMenuActionAsync(
+        ITelegramBotClient botClient,
+        Message message,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        var chatId = message.Chat.Id;
+        switch (action)
+        {
+            case MenuStatus:
+                return await BuildStatusTextAsync(cancellationToken);
+            case MenuCurrentSettings:
+                return await BuildCurrentSettingsTextAsync(cancellationToken);
+            case MenuPresets:
+                return await BuildPresetsTextAsync(cancellationToken);
+            case MenuUsePreset:
+                await PromptPresetSelectionAsync(botClient, chatId, cancellationToken);
+                return string.Empty;
+            case MenuSavePreset:
+                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetSaveName });
+                return "Введите имя, под которым сохранить текущий appsettings.json в список пресетов.\nПример: dogeusdt.baseline";
+            case MenuUploadPreset:
+                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingPresetUpsertName });
+                return "Введите имя пресета, который нужно добавить или обновить.";
+            case MenuEditSetting:
+                SetState(chatId, new ConversationState { Action = PendingAction.AwaitingSettingPath });
+                return "Введите путь к параметру.\nПримеры:\nSymbol\nTestNotionalsUsd\nStorage.RootPath\nEntryThresholdUsd";
+            case MenuRestart:
+                return await HandleRestartCommandAsync(botClient, chatId, cancellationToken);
+            case MenuHelp:
+                return BuildHelpText();
+            default:
+                return BuildHelpText();
+        }
+    }
+
     private async Task<string> BuildStatusTextAsync(CancellationToken cancellationToken)
     {
         var status = _runtimeStateTracker.GetSnapshot();
@@ -173,7 +265,7 @@ public sealed class TelegramControlBotService : BackgroundService
             ? "Лучший сетап: пока нет."
             : $"Лучший сетап: {FormatDirection(best.Direction)} | {best.TestNotionalUsd:0.########} USD | класс {FormatSignalClass(best.SignalClass)} | net {best.NetEdgeUsd:+0.########;-0.########;0} USD.";
 
-        return $"Статус бота: {status.State}\n" +
+        return $"Статус бота: {FormatRuntimeState(status.State)}\n" +
                $"Символ: {status.Symbol}\n" +
                $"Активный preset: {presetName}\n" +
                $"Запущен: {FormatDate(status.StartedAtUtc)}\n" +
@@ -291,6 +383,42 @@ public sealed class TelegramControlBotService : BackgroundService
         return string.Empty;
     }
 
+    private async Task<string> HandleStartAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    {
+        ResetState(chatId);
+        await ReplyAsync(botClient, chatId, BuildStartText(), cancellationToken, CreateMainMenuKeyboard());
+        return string.Empty;
+    }
+
+    private async Task<string> HandleHelpAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    {
+        await ReplyAsync(botClient, chatId, BuildHelpText(), cancellationToken, CreateMainMenuKeyboard());
+        return string.Empty;
+    }
+
+    private async Task PromptPresetSelectionAsync(ITelegramBotClient botClient, long chatId, CancellationToken cancellationToken)
+    {
+        var presetNames = _catalog.ListPresetNames();
+        SetState(chatId, new ConversationState
+        {
+            Action = PendingAction.AwaitingPresetSelection
+        });
+
+        if (presetNames.Count == 0)
+        {
+            await ReplyAsync(botClient, chatId, "Список пресетов пуст. Сначала сохраните текущие настройки или загрузите новый пресет.", cancellationToken, CreateMainMenuKeyboard());
+            ResetState(chatId);
+            return;
+        }
+
+        await ReplyAsync(
+            botClient,
+            chatId,
+            "Выберите пресет кнопкой ниже или отправьте его имя текстом.",
+            cancellationToken,
+            CreatePresetKeyboard(presetNames));
+    }
+
     private async Task<string> DownloadDocumentTextAsync(ITelegramBotClient botClient, Document document, CancellationToken cancellationToken)
     {
         await using var stream = new MemoryStream();
@@ -306,26 +434,232 @@ public sealed class TelegramControlBotService : BackgroundService
         _telegramSettings.Enabled &&
         message.From?.Id == _telegramSettings.AllowedUserId;
 
-    private static async Task ReplyAsync(ITelegramBotClient botClient, long chatId, string text, CancellationToken cancellationToken)
+    private bool TryHandleMenuAction(string text, out string menuAction)
+    {
+        var knownActions = new[]
+        {
+            MenuStatus,
+            MenuCurrentSettings,
+            MenuPresets,
+            MenuUsePreset,
+            MenuSavePreset,
+            MenuUploadPreset,
+            MenuEditSetting,
+            MenuRestart,
+            MenuHelp
+        };
+
+        menuAction = knownActions.FirstOrDefault(x => x.Equals(text, StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(menuAction);
+    }
+
+    private bool TryHandleConversationInput(
+        string normalizedText,
+        Message message,
+        out Func<CancellationToken, Task<string>> handler)
+    {
+        var state = GetState(message.Chat.Id);
+        handler = _ => Task.FromResult(string.Empty);
+
+        switch (state.Action)
+        {
+            case PendingAction.AwaitingPresetSelection:
+                handler = async cancellationToken =>
+                {
+                    var presetName = await _catalog.ActivatePresetAsync(normalizedText, cancellationToken);
+                    ResetState(message.Chat.Id);
+                    return $"Пресет `{presetName}` выбран. Теперь можно нажать «Перезапустить бота», чтобы он стартовал уже с этими настройками.";
+                };
+                return true;
+
+            case PendingAction.AwaitingPresetSaveName:
+                handler = async cancellationToken =>
+                {
+                    var presetName = await _catalog.SaveCurrentAsPresetAsync(normalizedText, cancellationToken);
+                    ResetState(message.Chat.Id);
+                    return $"Текущие настройки сохранены как пресет `{presetName}`.";
+                };
+                return true;
+
+            case PendingAction.AwaitingPresetUpsertName:
+                handler = cancellationToken =>
+                {
+                    SetState(message.Chat.Id, new ConversationState
+                    {
+                        Action = PendingAction.AwaitingPresetUpsertPayload,
+                        DraftPresetName = normalizedText
+                    });
+
+                    return Task.FromResult(
+                        "Теперь пришлите JSON пресета.\nМожно просто вставить JSON текстом следующим сообщением или отправить `.json` файлом.");
+                };
+                return true;
+
+            case PendingAction.AwaitingPresetUpsertPayload:
+                handler = async cancellationToken =>
+                {
+                    var payload = message.Text ?? message.Caption;
+                    string json;
+                    if (message.Document is not null)
+                    {
+                        json = await DownloadDocumentTextAsync(_botClient!, message.Document, cancellationToken);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(payload))
+                    {
+                        json = payload;
+                    }
+                    else
+                    {
+                        throw new ValidationException("Нужен JSON текст или `.json` файл.");
+                    }
+
+                    var presetName = state.DraftPresetName
+                        ?? throw new ValidationException("Не удалось определить имя пресета.");
+                    presetName = await _catalog.UpsertPresetAsync(presetName, json, cancellationToken);
+                    ResetState(message.Chat.Id);
+                    return $"Пресет `{presetName}` сохранён в список.";
+                };
+                return true;
+
+            case PendingAction.AwaitingSettingPath:
+                handler = cancellationToken =>
+                {
+                    SetState(message.Chat.Id, new ConversationState
+                    {
+                        Action = PendingAction.AwaitingSettingValue,
+                        DraftSettingPath = normalizedText
+                    });
+
+                    return Task.FromResult(
+                        $"Путь `{normalizedText}` принят.\nТеперь отправьте новое значение в JSON-формате.\nПримеры:\n\"DOGEUSDT\"\n25\n[10,20,50]\n0.5");
+                };
+                return true;
+
+            case PendingAction.AwaitingSettingValue:
+                handler = async cancellationToken =>
+                {
+                    var path = state.DraftSettingPath
+                        ?? throw new ValidationException("Не удалось определить путь к настройке.");
+                    await _catalog.PatchCurrentSettingsAsync(path, normalizedText, cancellationToken);
+                    ResetState(message.Chat.Id);
+                    return $"Параметр `{path}` обновлён. Если настройка должна сразу примениться к сканеру, нажмите «Перезапустить бота».";
+                };
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private ConversationState GetState(long chatId)
+    {
+        lock (_statesLock)
+        {
+            return _statesByChat.TryGetValue(chatId, out var state)
+                ? state
+                : new ConversationState();
+        }
+    }
+
+    private void SetState(long chatId, ConversationState state)
+    {
+        lock (_statesLock)
+        {
+            _statesByChat[chatId] = state;
+        }
+    }
+
+    private void ResetState(long chatId)
+    {
+        lock (_statesLock)
+        {
+            _statesByChat.Remove(chatId);
+        }
+    }
+
+    private static async Task ReplyAsync(
+        ITelegramBotClient botClient,
+        long chatId,
+        string text,
+        CancellationToken cancellationToken,
+        ReplyMarkup? replyMarkup = null)
     {
         await botClient.SendMessage(
             chatId: chatId,
             text: text,
+            replyMarkup: replyMarkup,
             cancellationToken: cancellationToken);
     }
 
+    private static string BuildStartText() =>
+        """
+        Панель управления ArbiScan.
+
+        Что можно делать из бота:
+        - посмотреть текущий статус сканера
+        - посмотреть активные настройки
+        - выбрать пресет настроек из списка
+        - сохранить текущие настройки как новый пресет
+        - добавить или обновить пресет через JSON
+        - точечно изменить отдельный параметр
+        - перезапустить бота с новыми настройками
+
+        Нажмите кнопку ниже.
+        """;
+
     private static string BuildHelpText() =>
         """
-        Команды Telegram control:
-        /status - текущий runtime-статус сканера
-        /settings - показать текущий appsettings.json
-        /presets - показать список preset из /srv/ArbiScan/config/appsettings
-        /set <путь> <json-значение> - исправить текущее значение в appsettings.json
-        /save_preset <имя> - сохранить текущий appsettings.json в список preset
-        /use_preset <имя> - выбрать preset из списка и записать его в текущий appsettings.json
-        /upsert_preset <имя> - добавить или обновить preset JSON-текстом или `.json` документом
-        /restart - перезапустить бота с текущим appsettings.json
+        Работа через меню:
+        - «Статус» показывает, жив ли сканер и какой сейчас лучший сетап
+        - «Текущие настройки» показывает активный appsettings.json
+        - «Список пресетов» показывает, что лежит в /srv/ArbiScan/config/appsettings
+        - «Выбрать пресет» переключает текущий appsettings.json на один из пресетов
+        - «Сохранить текущие настройки» кладёт текущий appsettings.json в список пресетов
+        - «Добавить или обновить пресет» принимает JSON текстом или `.json` файлом
+        - «Изменить параметр» пошагово меняет один конкретный параметр
+        - «Перезапустить бота» перезапускает процесс и применяет текущий appsettings.json
+
+        Для опытного режима старые команды тоже работают:
+        /status
+        /settings
+        /presets
+        /set <путь> <json-значение>
+        /save_preset <имя>
+        /use_preset <имя>
+        /upsert_preset <имя>
+        /restart
         """;
+
+    private static ReplyKeyboardMarkup CreateMainMenuKeyboard() =>
+        new(new[]
+        {
+            new KeyboardButton[] { MenuStatus, MenuCurrentSettings },
+            new KeyboardButton[] { MenuPresets, MenuUsePreset },
+            new KeyboardButton[] { MenuSavePreset, MenuUploadPreset },
+            new KeyboardButton[] { MenuEditSetting, MenuRestart },
+            new KeyboardButton[] { MenuHelp }
+        })
+        {
+            ResizeKeyboard = true,
+            IsPersistent = true
+        };
+
+    private static ReplyKeyboardMarkup CreatePresetKeyboard(IReadOnlyList<string> presetNames)
+    {
+        var rows = new List<KeyboardButton[]>();
+        foreach (var chunk in presetNames.Chunk(2))
+        {
+            rows.Add(chunk.Select(x => new KeyboardButton(x)).ToArray());
+        }
+
+        rows.Add([new KeyboardButton(MenuBack)]);
+
+        return new ReplyKeyboardMarkup(rows)
+        {
+            ResizeKeyboard = true,
+            IsPersistent = true
+        };
+    }
 
     private static string FormatDirection(ArbitrageDirection direction) =>
         direction switch
@@ -347,6 +681,17 @@ public sealed class TelegramControlBotService : BackgroundService
 
     private static string FormatDate(DateTimeOffset? value) =>
         value?.ToString("yyyy-MM-dd HH:mm:ss 'UTC'") ?? "n/a";
+
+    private static string FormatRuntimeState(string state) =>
+        state switch
+        {
+            "running" => "работает",
+            "starting" => "запускается",
+            "stopping" => "останавливается",
+            "stopped" => "остановлен",
+            "error" => "ошибка",
+            _ => state
+        };
 
     private static string FormatExchange(ExchangeMarketSnapshot? snapshot) =>
         snapshot is null

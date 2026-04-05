@@ -253,7 +253,7 @@ public sealed class ScannerWorker : BackgroundService
             _logger.LogInformation("{Exchange} quotes recovered from stale", exchange);
         }
 
-        if (!previousHealthy && isHealthy)
+        if (!previousHealthy && isHealthy && !previousStale)
         {
             await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeRecovered, exchange, DataHealthFlags.None, true, $"{exchange} quote stream recovered"), cancellationToken);
         }
