@@ -5,6 +5,7 @@ namespace ArbiScan.Scanner;
 public static class AppVersion
 {
     public static string Current { get; } = ResolveCurrent();
+    public static string ProductName => $"ArbiScan v{Current}";
 
     private static string ResolveCurrent()
     {

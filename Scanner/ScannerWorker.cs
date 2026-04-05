@@ -72,7 +72,7 @@ public sealed class ScannerWorker : BackgroundService
         try
         {
             await _repository.InitializeAsync(stoppingToken);
-            await PersistHealthEventAsync(new HealthEvent(_startedAtUtc, HealthEventType.ApplicationStarted, null, DataHealthFlags.None, true, $"ArbiScan v2 started ({AppVersion.Current})"), stoppingToken);
+            await PersistHealthEventAsync(new HealthEvent(_startedAtUtc, HealthEventType.ApplicationStarted, null, DataHealthFlags.None, true, $"{AppVersion.ProductName} started"), stoppingToken);
             await NotifyStartupAsync(stoppingToken);
 
             await _binanceAdapter.InitializeAsync(stoppingToken);
@@ -124,7 +124,7 @@ public sealed class ScannerWorker : BackgroundService
             await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeError, null, DataHealthFlags.None, false, $"Critical scanner error: {ex.Message}"), CancellationToken.None);
             if (_telegramSettings.NotifyOnCriticalError)
             {
-                await _telegramNotifier.SendMessageAsync($"ArbiScan v2 {AppVersion.Current} critical error: {ex.Message}", CancellationToken.None);
+                await _telegramNotifier.SendMessageAsync($"{AppVersion.ProductName} critical error: {ex.Message}", CancellationToken.None);
             }
 
             throw;
@@ -286,7 +286,7 @@ public sealed class ScannerWorker : BackgroundService
             healthEvent.Exchange.HasValue &&
             healthEvent.EventType is HealthEventType.ExchangeRecovered or HealthEventType.StaleQuotesDetected or HealthEventType.StaleQuotesRecovered)
         {
-            await _telegramNotifier.SendMessageAsync($"ArbiScan v2 {AppVersion.Current} health: {healthEvent.Message}", cancellationToken);
+            await _telegramNotifier.SendMessageAsync($"{AppVersion.ProductName} health: {healthEvent.Message}", cancellationToken);
         }
     }
 
@@ -294,7 +294,7 @@ public sealed class ScannerWorker : BackgroundService
     {
         if (_telegramNotifier.IsEnabled && _telegramSettings.NotifyOnStartup)
         {
-            await _telegramNotifier.SendMessageAsync($"ArbiScan v2 {AppVersion.Current} started for {_settings.Symbol}. Notionals: {string.Join(", ", _settings.TestNotionalsUsd.Select(x => x.ToString("0.########")))} USD.", cancellationToken);
+            await _telegramNotifier.SendMessageAsync($"{AppVersion.ProductName} started for {_settings.Symbol}. Notionals: {string.Join(", ", _settings.TestNotionalsUsd.Select(x => x.ToString("0.########")))} USD.", cancellationToken);
         }
     }
 
@@ -310,11 +310,11 @@ public sealed class ScannerWorker : BackgroundService
 
             await _binanceAdapter.StopAsync(CancellationToken.None);
             await _bybitAdapter.StopAsync(CancellationToken.None);
-            await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ApplicationStopping, null, DataHealthFlags.None, true, $"ArbiScan v2 stopping ({AppVersion.Current})"), CancellationToken.None);
+            await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ApplicationStopping, null, DataHealthFlags.None, true, $"{AppVersion.ProductName} stopping"), CancellationToken.None);
 
             if (_telegramNotifier.IsEnabled && _telegramSettings.NotifyOnShutdown)
             {
-                await _telegramNotifier.SendMessageAsync($"ArbiScan v2 {AppVersion.Current} stopped for {_settings.Symbol}.", CancellationToken.None);
+                await _telegramNotifier.SendMessageAsync($"{AppVersion.ProductName} stopped for {_settings.Symbol}.", CancellationToken.None);
             }
         }
         catch (Exception ex)
@@ -327,11 +327,48 @@ public sealed class ScannerWorker : BackgroundService
     {
         var binance = snapshot.Binance;
         var bybit = snapshot.Bybit;
-        return $"ArbiScan v2 heartbeat {AppVersion.Current} {_settings.Symbol}\n" +
-               $"Binance bid/ask: {binance?.BestBidPrice:0.########}/{binance?.BestAskPrice:0.########}, age={binance?.DataAge.TotalMilliseconds:0} ms\n" +
-               $"Bybit bid/ask: {bybit?.BestBidPrice:0.########}/{bybit?.BestAskPrice:0.########}, age={bybit?.DataAge.TotalMilliseconds:0} ms\n" +
-               $"Health flags: {snapshot.HealthFlags}";
+        var evaluations = BuildHeartbeatEvaluations(snapshot);
+        var best = evaluations
+            .OrderByDescending(x => (int)x.SignalClass)
+            .ThenByDescending(x => x.NetEdgeUsd)
+            .ThenByDescending(x => x.GrossSpreadUsd)
+            .FirstOrDefault();
+
+        var headline = best is null
+            ? "No usable quotes right now."
+            : best.SignalClass switch
+            {
+                SignalClass.EntryQualified => $"Signal now: YES. Best entry-qualified setup is {FormatDirection(best.Direction)} on {best.TestNotionalUsd:0.########} USD.",
+                SignalClass.NetPositive => $"Signal now: borderline. Net-positive setup exists for {FormatDirection(best.Direction)} on {best.TestNotionalUsd:0.########} USD, but entry threshold is not met.",
+                SignalClass.FeePositive => $"Signal now: NO. Fees are covered for {FormatDirection(best.Direction)} on {best.TestNotionalUsd:0.########} USD, but safety buffer removes the edge.",
+                SignalClass.RawPositive => $"Signal now: NO. There is a raw cross-spread for {FormatDirection(best.Direction)} on {best.TestNotionalUsd:0.########} USD, but fees remove it.",
+                _ => "Signal now: NO. No positive cross-spread right now."
+            };
+
+        var detail = best is null
+            ? "Best setup: unavailable because one or both exchanges do not have usable quotes."
+            : $"Best setup: {FormatDirection(best.Direction)} | {best.TestNotionalUsd:0.########} USD | gross {best.GrossSpreadUsd:+0.########;-0.########;0} USD ({best.GrossSpreadBps:+0.##;-0.##;0} bps) | fees {best.TotalFeesUsd:0.########} USD | buffer {best.SafetyBufferUsd:0.########} USD | net {best.NetEdgeUsd:+0.########;-0.########;0} USD ({best.NetEdgeBps:+0.##;-0.##;0} bps) | est pnl {best.ExpectedNetPnlUsd:+0.########;-0.########;0} USD.";
+
+        return $"{AppVersion.ProductName} heartbeat | {_settings.Symbol}\n" +
+               $"{headline}\n" +
+               $"{detail}\n" +
+               $"Quotes: Binance {binance?.BestBidPrice:0.########}/{binance?.BestAskPrice:0.########} ({binance?.DataAge.TotalMilliseconds:0} ms), Bybit {bybit?.BestBidPrice:0.########}/{bybit?.BestAskPrice:0.########} ({bybit?.DataAge.TotalMilliseconds:0} ms)\n" +
+               $"Health: {snapshot.HealthFlags}";
     }
+
+    private IReadOnlyList<OpportunityEvaluation> BuildHeartbeatEvaluations(MarketDataSnapshot snapshot) =>
+        Enum.GetValues<ArbitrageDirection>()
+            .SelectMany(direction => _settings.TestNotionalsUsd.Select(notional => _signalCalculator.Evaluate(snapshot, direction, notional, _settings)))
+            .Where(x => x.IsQuoteUsable)
+            .ToArray();
+
+    private static string FormatDirection(ArbitrageDirection direction) =>
+        direction switch
+        {
+            ArbitrageDirection.BuyBinanceSellBybit => "Buy Binance / Sell Bybit",
+            ArbitrageDirection.BuyBybitSellBinance => "Buy Bybit / Sell Binance",
+            _ => direction.ToString()
+        };
 
     private static DateTimeOffset RoundUpToHour(DateTimeOffset timestampUtc)
     {

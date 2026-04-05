@@ -14,7 +14,6 @@ namespace ArbiScan.Exchanges.Bybit;
 public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
 {
     private readonly string _symbol;
-    private readonly RuntimeMode _runtimeMode;
     private readonly ExchangeConnectionSettings _connectionSettings;
     private readonly ILogger<BybitSpotExchangeAdapter> _logger;
 
@@ -31,12 +30,10 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
     public BybitSpotExchangeAdapter(
         string symbol,
-        RuntimeMode runtimeMode,
         ExchangeConnectionSettings connectionSettings,
         ILogger<BybitSpotExchangeAdapter> logger)
     {
         _symbol = symbol;
-        _runtimeMode = runtimeMode;
         _connectionSettings = connectionSettings;
         _logger = logger;
     }
@@ -45,13 +42,9 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        var environment = _runtimeMode == RuntimeMode.Testnet
-            ? BybitEnvironment.Testnet
-            : BybitEnvironment.Live;
-
         _restClient = new BybitRestClient(options =>
         {
-            options.Environment = environment;
+            options.Environment = BybitEnvironment.Live;
             if (!string.IsNullOrWhiteSpace(_connectionSettings.ApiKey) && !string.IsNullOrWhiteSpace(_connectionSettings.ApiSecret))
             {
                 options.ApiCredentials = new BybitCredentials(_connectionSettings.ApiKey, _connectionSettings.ApiSecret);
@@ -60,7 +53,7 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
         _socketClient = new BybitSocketClient(options =>
         {
-            options.Environment = environment;
+            options.Environment = BybitEnvironment.Live;
             if (!string.IsNullOrWhiteSpace(_connectionSettings.ApiKey) && !string.IsNullOrWhiteSpace(_connectionSettings.ApiSecret))
             {
                 options.ApiCredentials = new BybitCredentials(_connectionSettings.ApiKey, _connectionSettings.ApiSecret);

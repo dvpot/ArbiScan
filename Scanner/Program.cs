@@ -53,12 +53,10 @@ builder.Services.AddSingleton<ITelegramNotifier>(sp =>
         : new NullTelegramNotifier());
 builder.Services.AddSingleton(sp => new BinanceSpotExchangeAdapter(
     settings.Symbol,
-    settings.RuntimeMode,
     settings.Binance,
     sp.GetRequiredService<ILogger<BinanceSpotExchangeAdapter>>()));
 builder.Services.AddSingleton(sp => new BybitSpotExchangeAdapter(
     settings.Symbol,
-    settings.RuntimeMode,
     settings.Bybit,
     sp.GetRequiredService<ILogger<BybitSpotExchangeAdapter>>()));
 builder.Services.AddHostedService<ScannerWorker>();

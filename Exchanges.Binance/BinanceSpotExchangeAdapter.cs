@@ -14,7 +14,6 @@ namespace ArbiScan.Exchanges.Binance;
 public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
 {
     private readonly string _symbol;
-    private readonly RuntimeMode _runtimeMode;
     private readonly ExchangeConnectionSettings _connectionSettings;
     private readonly ILogger<BinanceSpotExchangeAdapter> _logger;
 
@@ -31,12 +30,10 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
     public BinanceSpotExchangeAdapter(
         string symbol,
-        RuntimeMode runtimeMode,
         ExchangeConnectionSettings connectionSettings,
         ILogger<BinanceSpotExchangeAdapter> logger)
     {
         _symbol = symbol;
-        _runtimeMode = runtimeMode;
         _connectionSettings = connectionSettings;
         _logger = logger;
     }
@@ -45,13 +42,9 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        var environment = _runtimeMode == RuntimeMode.Testnet
-            ? BinanceEnvironment.Testnet
-            : BinanceEnvironment.Live;
-
         _restClient = new BinanceRestClient(options =>
         {
-            options.Environment = environment;
+            options.Environment = BinanceEnvironment.Live;
             if (!string.IsNullOrWhiteSpace(_connectionSettings.ApiKey) && !string.IsNullOrWhiteSpace(_connectionSettings.ApiSecret))
             {
                 options.ApiCredentials = new BinanceCredentials(_connectionSettings.ApiKey, _connectionSettings.ApiSecret);
@@ -60,7 +53,7 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
 
         _socketClient = new BinanceSocketClient(options =>
         {
-            options.Environment = environment;
+            options.Environment = BinanceEnvironment.Live;
             if (!string.IsNullOrWhiteSpace(_connectionSettings.ApiKey) && !string.IsNullOrWhiteSpace(_connectionSettings.ApiSecret))
             {
                 options.ApiCredentials = new BinanceCredentials(_connectionSettings.ApiKey, _connectionSettings.ApiSecret);

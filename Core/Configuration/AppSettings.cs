@@ -13,8 +13,6 @@ public sealed class AppSettings
     [Required]
     public string QuoteAsset { get; init; } = "USDT";
 
-    public RuntimeMode RuntimeMode { get; init; } = RuntimeMode.Mainnet;
-
     [Range(50, 10_000)]
     public int ScanIntervalMs { get; init; } = 250;
 
@@ -98,10 +96,4 @@ public sealed class ExchangeConnectionSettings
 {
     public string? ApiKey { get; init; }
     public string? ApiSecret { get; init; }
-}
-
-public enum RuntimeMode
-{
-    Mainnet = 0,
-    Testnet = 1
 }

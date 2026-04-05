@@ -7,7 +7,7 @@ if [[ $# -lt 1 || $# -gt 3 ]]; then
 fi
 
 analysis_date="$1"
-storage_root="${2:-/srv/arbiscan-v2}"
+storage_root="${2:-/srv/ArbiScan}"
 output_root="${3:-$(pwd)/analysis-bundles}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 bundle_name="arbiscan-analysis-${analysis_date}-${timestamp}"
@@ -101,7 +101,7 @@ else
 fi
 
 git_sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-app_version="$(git rev-list --count HEAD 2>/dev/null | awk '{print "2.0." $1}' || echo unknown)"
+app_version="$(./scripts/get-version.sh 2>/dev/null || echo unknown)"
 collection_time_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 container_id="$(docker ps --filter "name=^arbiscan$" --format '{{.ID}}' 2>/dev/null | head -n 1 || true)"
 container_started_at="unknown"

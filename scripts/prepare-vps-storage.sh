@@ -9,7 +9,7 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 old_root="${1:-/srv/ArbiScan}"
-new_root="${2:-/srv/arbiscan-v2}"
+new_root="${2:-/srv/ArbiScan}"
 
 mkdir -p "${new_root}/config" "${new_root}/logs" "${new_root}/data" "${new_root}/reports"
 
@@ -41,6 +41,6 @@ fi
 
 rm -rf "${new_root}/logs"/* "${new_root}/data"/* "${new_root}/reports"/*
 
-printf 'Prepared v2 storage at %s\n' "${new_root}"
+printf 'Prepared storage at %s for ArbiScan v2\n' "${new_root}"
 printf 'Backups (if source files existed) were written to %s/config\n' "${new_root}"
 printf 'Runtime directories logs/data/reports were cleared.\n'

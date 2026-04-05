@@ -38,10 +38,10 @@ Not included:
 
 Recommended VPS root:
 
-- `/srv/arbiscan-v2/config`
-- `/srv/arbiscan-v2/logs`
-- `/srv/arbiscan-v2/data`
-- `/srv/arbiscan-v2/reports`
+- `/srv/ArbiScan/config`
+- `/srv/ArbiScan/logs`
+- `/srv/ArbiScan/data`
+- `/srv/ArbiScan/reports`
 
 Main artifacts:
 
@@ -69,15 +69,14 @@ Tracked examples:
 
 Production files live in the mounted VPS config directory:
 
-- `/srv/arbiscan-v2/config/appsettings.json`
-- `/srv/arbiscan-v2/config/telegramsettings.json`
+- `/srv/ArbiScan/config/appsettings.json`
+- `/srv/ArbiScan/config/telegramsettings.json`
 
 Important app settings:
 
 - `Symbol`
 - `BaseAsset`
 - `QuoteAsset`
-- `RuntimeMode`
 - `ScanIntervalMs`
 - `QuoteStalenessThresholdMs`
 - `TestNotionalsUsd`
@@ -113,7 +112,7 @@ dotnet test ArbiScan.slnx
 Example:
 
 ```bash
-ArbiScan__Storage__RootPath=/tmp/arbiscan-v2 \
+ArbiScan__Storage__RootPath=/tmp/arbiscan \
 dotnet run --project Scanner/ArbiScan.Scanner.csproj
 ```
 
@@ -122,9 +121,9 @@ dotnet run --project Scanner/ArbiScan.Scanner.csproj
 Prepare storage:
 
 ```bash
-mkdir -p /srv/arbiscan-v2/config /srv/arbiscan-v2/logs /srv/arbiscan-v2/data /srv/arbiscan-v2/reports
-cp config/appsettings.example.json /srv/arbiscan-v2/config/appsettings.json
-cp config/telegramsettings.example.json /srv/arbiscan-v2/config/telegramsettings.json
+mkdir -p /srv/ArbiScan/config /srv/ArbiScan/logs /srv/ArbiScan/data /srv/ArbiScan/reports
+cp config/appsettings.example.json /srv/ArbiScan/config/appsettings.json
+cp config/telegramsettings.example.json /srv/ArbiScan/config/telegramsettings.json
 cp .env.example .env
 ```
 
@@ -143,26 +142,26 @@ The GitHub Actions workflow builds, tests, publishes `ghcr.io/<owner>/arbiscan`,
 Before the first v2 launch on VPS:
 
 1. Backup or stop the current container.
-2. Keep Telegram config, but move/update it for v2.
+2. Keep Telegram config and update app settings to the v2 structure.
 3. Replace app settings with the v2 structure.
 4. Delete old runtime logs/data/reports before the first v2 start.
 
 Helper:
 
 ```bash
-./scripts/prepare-vps-v2-storage.sh /srv/ArbiScan /srv/arbiscan-v2
+./scripts/prepare-vps-storage.sh /srv/ArbiScan /srv/ArbiScan
 ```
 
 This helper:
 
-- creates the v2 storage tree
+- keeps the normal `ArbiScan` storage tree
 - preserves config backups
 - carries `telegramsettings.json` forward when present
 - seeds `appsettings.json` from the tracked v2 example when needed
-- clears `logs`, `data`, and `reports` in the v2 storage root
+- clears `logs`, `data`, and `reports` before the first v2 start
 
 ## Analysis Bundle
 
 ```bash
-./scripts/collect-analysis-bundle.sh 20260405 /srv/arbiscan-v2
+./scripts/collect-analysis-bundle.sh 20260405 /srv/ArbiScan
 ```

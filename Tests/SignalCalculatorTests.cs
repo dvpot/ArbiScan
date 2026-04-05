@@ -49,7 +49,6 @@ public sealed class SignalCalculatorTests
             Symbol = DefaultSettings.Symbol,
             BaseAsset = DefaultSettings.BaseAsset,
             QuoteAsset = DefaultSettings.QuoteAsset,
-            RuntimeMode = DefaultSettings.RuntimeMode,
             ScanIntervalMs = DefaultSettings.ScanIntervalMs,
             QuoteStalenessThresholdMs = DefaultSettings.QuoteStalenessThresholdMs,
             CumulativeSummaryIntervalSeconds = DefaultSettings.CumulativeSummaryIntervalSeconds,
