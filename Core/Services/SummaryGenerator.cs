@@ -61,7 +61,7 @@ public sealed class SummaryGenerator : ISummaryGenerator
     {
         if (signals.Count == 0)
         {
-            return "No signal observations were persisted for the selected period.";
+            return "За выбранный период не было сохранено ни одного наблюдения сигнала.";
         }
 
         var rawPositive = signals.Count(x => x.SignalClass >= SignalClass.RawPositive);
@@ -79,10 +79,10 @@ public sealed class SummaryGenerator : ISummaryGenerator
             .ThenByDescending(g => g.Count(x => x.SignalClass >= SignalClass.NetPositive))
             .First().Key;
 
-        return $"Raw positive signals: {rawPositive}; survived fees: {feePositive}; survived safety buffer: {netPositive}; entry-qualified: {entryQualified}. " +
-               $"Best notional: {bestNotional:0.########} USD. Most frequent direction: {bestDirection}. " +
-               $"Typical net edge: avg {signals.Average(x => x.NetEdgeUsd):0.########} USD / {signals.Average(x => x.NetEdgeBps):0.########} bps. " +
-               $"{(netPositive > 0 ? "There is evidence worth deeper execution modelling." : "At best-bid-ask level the market currently looks unpromising.")}";
+        return $"Положительных raw-сигналов: {rawPositive}; пережили комиссии: {feePositive}; пережили safety buffer: {netPositive}; entry-qualified: {entryQualified}. " +
+               $"Лучший notional: {bestNotional:0.########} USD. Самое частое направление: {bestDirection}. " +
+               $"Типичный net edge: среднее {signals.Average(x => x.NetEdgeUsd):0.########} USD / {signals.Average(x => x.NetEdgeBps):0.########} bps. " +
+               $"{(netPositive > 0 ? "Есть основания для более глубокого прикладного анализа." : "На уровне best bid / best ask рынок сейчас выглядит слабообещающим.")}";
     }
 
     private static string BucketNetEdgeBps(decimal value) =>

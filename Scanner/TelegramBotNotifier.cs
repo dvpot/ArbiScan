@@ -1,16 +1,23 @@
 using ArbiScan.Core.Configuration;
 using ArbiScan.Core.Interfaces;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Threading.Channels;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 
 namespace ArbiScan.Scanner;
 
-public sealed class TelegramBotNotifier : ITelegramNotifier
+public sealed class TelegramBotNotifier : BackgroundService, ITelegramNotifier
 {
     private readonly TelegramSettings _settings;
     private readonly TelegramBotClient _botClient;
     private readonly ILogger<TelegramBotNotifier> _logger;
+    private readonly Channel<string> _messageQueue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = false
+    });
 
     public TelegramBotNotifier(TelegramSettings settings, ILogger<TelegramBotNotifier> logger)
     {
@@ -28,6 +35,40 @@ public sealed class TelegramBotNotifier : ITelegramNotifier
             return;
         }
 
+        await _messageQueue.Writer.WriteAsync(message, cancellationToken);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            while (await _messageQueue.Reader.WaitToReadAsync(stoppingToken))
+            {
+                while (_messageQueue.Reader.TryRead(out var message))
+                {
+                    await SendDirectAsync(message, stoppingToken);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            await DrainPendingMessagesAsync();
+        }
+    }
+
+    private async Task DrainPendingMessagesAsync()
+    {
+        while (_messageQueue.Reader.TryRead(out var pendingMessage))
+        {
+            await SendDirectAsync(pendingMessage, CancellationToken.None);
+        }
+    }
+
+    private async Task SendDirectAsync(string message, CancellationToken cancellationToken)
+    {
         try
         {
             await _botClient.SendMessage(

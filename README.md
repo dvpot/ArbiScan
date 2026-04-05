@@ -2,7 +2,7 @@
 
 `ArbiScan` v2 is a .NET 10 scanner for one-symbol spot arbitrage observation between `Binance Spot` and `Bybit Spot`.
 
-It does not trade. It watches only best bid / best ask, evaluates both directions for small test notionals, groups positive observations into windows, stores machine-readable artifacts locally, and sends optional Telegram notifications.
+It does not trade. It watches only best bid / best ask, evaluates both directions for small test notionals, groups positive observations into windows, stores machine-readable artifacts locally, and sends optional Telegram notifications and control commands.
 
 ## Scope
 
@@ -29,7 +29,7 @@ Not included:
 - `Infrastructure`: SQLite persistence, JSON/JSONL exporters, rolling file logging
 - `Exchanges.Binance`: Binance best-bid-ask adapter
 - `Exchanges.Bybit`: Bybit top-of-book adapter
-- `Scanner`: host bootstrap, worker loop, Telegram notifier
+- `Scanner`: host bootstrap, worker loop, Telegram notifier and control bot
 - `Tests`: v2-lite unit tests
 - `config`: example runtime config files
 - `scripts`: versioning, bundle collection, VPS prep helpers
@@ -71,6 +71,7 @@ Production files live in the mounted VPS config directory:
 
 - `/srv/ArbiScan/config/appsettings.json`
 - `/srv/ArbiScan/config/telegramsettings.json`
+- `/srv/ArbiScan/config/appsettings/*.json`
 
 Important app settings:
 
@@ -85,6 +86,7 @@ Important app settings:
 - `SafetyBufferBps`
 - `EntryThresholdUsd`
 - `EntryThresholdBps`
+- `RawSignalJsonExportMode`
 - `Storage`
 
 Telegram settings:
@@ -97,6 +99,27 @@ Telegram settings:
 - `NotifyOnShutdown`
 - `NotifyOnCriticalError`
 - `NotifyOnHealthStateChanges`
+- `NotifyOnSignalLifecycle`
+- `NotifyOnSignalNewMax`
+
+Notes:
+
+- API keys are not required for the normal public-data scanner run.
+- `RawSignalJsonExportMode` controls JSONL noise while SQLite still keeps the full raw history.
+- `Bybit.Net 6.10.0` spot ticker stream does not expose best bid / ask, so the current lightweight `BybitSymbolOrderBook(limit=1)` remains the practical top-of-book choice.
+- Telegram control commands are allowed only for `TelegramBot:AllowedUserId`.
+- Appsettings preset list is stored in `/srv/ArbiScan/config/appsettings`.
+
+Telegram control commands:
+
+- `/status`
+- `/settings`
+- `/presets`
+- `/set <path> <json-value>`
+- `/save_preset <name>`
+- `/use_preset <name>`
+- `/upsert_preset <name>`
+- `/restart`
 
 ## Build And Test
 

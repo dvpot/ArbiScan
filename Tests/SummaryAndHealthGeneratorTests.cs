@@ -41,7 +41,7 @@ public sealed class SummaryAndHealthGeneratorTests
         Assert.Equal(90000d, summary.MedianLifetimeMs);
         Assert.Equal(120000, summary.MaxLifetimeMs);
         Assert.Equal(0.20m, summary.TheoreticalNetPnlUsd);
-        Assert.Contains("Raw positive signals: 4", summary.FinalAssessment, StringComparison.Ordinal);
+        Assert.Contains("Положительных raw-сигналов: 4", summary.FinalAssessment, StringComparison.Ordinal);
     }
 
     [Fact]

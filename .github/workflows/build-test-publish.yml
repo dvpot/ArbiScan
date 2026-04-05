@@ -126,7 +126,7 @@ jobs:
               source ./.env
               set +a
             fi
-            storage_root="${ARBISCAN_STORAGE_ROOT:-/srv/arbiscan-v2}"
+            storage_root="${ARBISCAN_STORAGE_ROOT:-/srv/ArbiScan}"
             mkdir -p "${storage_root}/config" "${storage_root}/logs" "${storage_root}/data" "${storage_root}/reports"
             existing_container_id="$(docker ps -aq -f name=^arbiscan$ || true)"
             if [[ -n "${existing_container_id}" ]]; then

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ArbiScan.Core.Enums;
 
 namespace ArbiScan.Core.Configuration;
 
@@ -39,6 +40,8 @@ public sealed class AppSettings
 
     [Range(-10_000, 10_000)]
     public decimal EntryThresholdBps { get; init; } = 0m;
+
+    public RawSignalJsonExportMode RawSignalJsonExportMode { get; init; } = RawSignalJsonExportMode.PositiveOnly;
 
     [Required]
     public StorageSettings Storage { get; init; } = new();
@@ -90,6 +93,10 @@ public sealed class TelegramSettings
     public bool NotifyOnCriticalError { get; init; } = true;
 
     public bool NotifyOnHealthStateChanges { get; init; } = true;
+
+    public bool NotifyOnSignalLifecycle { get; init; } = true;
+
+    public bool NotifyOnSignalNewMax { get; init; }
 }
 
 public sealed class ExchangeConnectionSettings

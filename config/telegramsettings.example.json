@@ -7,6 +7,8 @@
     "NotifyOnStartup": true,
     "NotifyOnShutdown": true,
     "NotifyOnCriticalError": true,
-    "NotifyOnHealthStateChanges": true
+    "NotifyOnHealthStateChanges": true,
+    "NotifyOnSignalLifecycle": true,
+    "NotifyOnSignalNewMax": false
   }
 }

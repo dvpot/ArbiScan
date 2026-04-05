@@ -34,7 +34,7 @@ public sealed class HealthReportGenerator : IHealthReportGenerator
             totalDegradedDurationMs,
             marketDataErrorCount,
             unhealthyDurations,
-            $"Reconnects={reconnectCount}, stale intervals={staleCount}, market-data errors={marketDataErrorCount}, degraded duration={totalDegradedDurationMs} ms.");
+            $"Переподключений={reconnectCount}, stale-интервалов={staleCount}, ошибок market data={marketDataErrorCount}, суммарная деградация={totalDegradedDurationMs} ms.");
     }
 
     private static IReadOnlyDictionary<string, long> BuildUnhealthyDurations(
