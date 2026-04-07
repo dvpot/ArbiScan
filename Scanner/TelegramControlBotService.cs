@@ -561,7 +561,9 @@ public sealed class TelegramControlBotService : BackgroundService
         var settings = await LoadCurrentSettingsAsync(cancellationToken);
         return $"Тайминги:\n" +
                $"ScanIntervalMs = {settings.ScanIntervalMs}\n" +
-               $"QuoteStalenessThresholdMs = {settings.QuoteStalenessThresholdMs}\n" +
+               $"RestHealthProbeEnabled = {settings.RestHealthProbeEnabled}\n" +
+               $"RestHealthProbeAfterMs = {settings.RestHealthProbeAfterMs}\n" +
+               $"RestHealthProbeCooldownMs = {settings.RestHealthProbeCooldownMs}\n" +
                $"CumulativeSummaryIntervalSeconds = {settings.CumulativeSummaryIntervalSeconds}";
     }
 
@@ -908,9 +910,14 @@ public sealed class TelegramControlBotService : BackgroundService
             },
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("Stale 2000 ms", "setting:quick:QuoteStalenessThresholdMs:2000"),
-                InlineKeyboardButton.WithCallbackData("Stale 3000 ms", "setting:quick:QuoteStalenessThresholdMs:3000"),
-                InlineKeyboardButton.WithCallbackData("Stale 5000 ms", "setting:quick:QuoteStalenessThresholdMs:5000")
+                InlineKeyboardButton.WithCallbackData("Probe ON", "setting:quick:RestHealthProbeEnabled:true"),
+                InlineKeyboardButton.WithCallbackData("Probe OFF", "setting:quick:RestHealthProbeEnabled:false")
+            },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("Probe 5000 ms", "setting:quick:RestHealthProbeAfterMs:5000"),
+                InlineKeyboardButton.WithCallbackData("Probe 10000 ms", "setting:quick:RestHealthProbeAfterMs:10000"),
+                InlineKeyboardButton.WithCallbackData("Probe 30000 ms", "setting:quick:RestHealthProbeAfterMs:30000")
             },
             new[]
             {
@@ -921,11 +928,15 @@ public sealed class TelegramControlBotService : BackgroundService
             new[]
             {
                 InlineKeyboardButton.WithCallbackData("Scan вручную", "setting:custom:ScanIntervalMs"),
-                InlineKeyboardButton.WithCallbackData("Stale вручную", "setting:custom:QuoteStalenessThresholdMs")
+                InlineKeyboardButton.WithCallbackData("Probe вручную", "setting:custom:RestHealthProbeAfterMs")
             },
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("Summary вручную", "setting:custom:CumulativeSummaryIntervalSeconds"),
+                InlineKeyboardButton.WithCallbackData("Probe cooldown", "setting:custom:RestHealthProbeCooldownMs"),
+                InlineKeyboardButton.WithCallbackData("Summary вручную", "setting:custom:CumulativeSummaryIntervalSeconds")
+            },
+            new[]
+            {
                 InlineKeyboardButton.WithCallbackData("Назад", MenuEditSettings)
             }
         });
@@ -996,7 +1007,8 @@ public sealed class TelegramControlBotService : BackgroundService
         {
             "TestNotionalsUsd" => "Отправьте массив в JSON-формате, например:\n[10,20,50]",
             "ScanIntervalMs" => "Отправьте новое число, например:\n250",
-            "QuoteStalenessThresholdMs" => "Отправьте новое число, например:\n3000",
+            "RestHealthProbeAfterMs" => "Отправьте новое число, например:\n5000",
+            "RestHealthProbeCooldownMs" => "Отправьте новое число, например:\n30000",
             "CumulativeSummaryIntervalSeconds" => "Отправьте новое число, например:\n3600",
             "SafetyBufferBps" => "Отправьте новое число, например:\n2",
             "EntryThresholdUsd" => "Отправьте новое число, например:\n0.01",

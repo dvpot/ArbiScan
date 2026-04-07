@@ -120,6 +120,31 @@ public sealed class BinanceSpotExchangeAdapter : IExchangeAdapter, IDisposable
             _errorCount);
     }
 
+    public async Task<(bool Success, string? FailureReason)> ProbeHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(_restClient);
+            var result = await _restClient.SpotApi.ExchangeData.GetTickerAsync(_symbol, cancellationToken);
+            if (!result.Success || result.Data is null)
+            {
+                return (false, $"Binance REST probe failed: {result.Error}");
+            }
+
+            if (result.Data.BestBidPrice <= 0m || result.Data.BestAskPrice <= 0m)
+            {
+                return (false, "Binance REST probe returned empty top-of-book");
+            }
+
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Binance REST health probe failed for {Symbol}", _symbol);
+            return (false, $"Binance REST probe exception: {ex.Message}");
+        }
+    }
+
     public void Dispose()
     {
         _socketClient?.Dispose();

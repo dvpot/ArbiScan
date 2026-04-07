@@ -15,8 +15,16 @@ public sealed class ScannerWorker : BackgroundService
 {
     private sealed class HealthNotificationState
     {
-        public DateTimeOffset? LastStaleNotificationAtUtc { get; set; }
-        public bool HasActiveStaleNotification { get; set; }
+        public DateTimeOffset? LastProblemNotificationAtUtc { get; set; }
+        public bool HasActiveProblemNotification { get; set; }
+    }
+
+    private sealed class RestProbeState
+    {
+        public DateTimeOffset? LastProbeAtUtc { get; set; }
+        public DateTimeOffset? LastObservedUpdateUtc { get; set; }
+        public bool? LastSucceeded { get; set; }
+        public string? LastFailureReason { get; set; }
     }
 
     private sealed class SignalLifecycleState
@@ -43,9 +51,8 @@ public sealed class ScannerWorker : BackgroundService
     private readonly ILogger<ScannerWorker> _logger;
 
     private readonly Dictionary<ExchangeId, bool> _wasHealthyByExchange = new();
-    private readonly Dictionary<ExchangeId, bool> _wasStaleByExchange = new();
-    private readonly Dictionary<ExchangeId, DateTimeOffset?> _staleCandidateSinceByExchange = new();
     private readonly Dictionary<ExchangeId, HealthNotificationState> _healthNotificationStatesByExchange = new();
+    private readonly Dictionary<ExchangeId, RestProbeState> _restProbeStatesByExchange = new();
     private readonly Dictionary<string, SignalLifecycleState> _signalLifecycleStates = new(StringComparer.Ordinal);
     private DateTimeOffset _startedAtUtc;
     private string _shutdownReason = "Остановка без уточнённой причины.";
@@ -172,18 +179,18 @@ public sealed class ScannerWorker : BackgroundService
         {
             flags |= DataHealthFlags.BinanceMissing | DataHealthFlags.BinanceUnhealthy;
         }
-        else if (binance.DataAge.TotalMilliseconds > _settings.QuoteStalenessThresholdMs)
+        else if (!binance.IsConnected)
         {
-            flags |= DataHealthFlags.BinanceStale | DataHealthFlags.BinanceUnhealthy;
+            flags |= DataHealthFlags.BinanceUnhealthy;
         }
 
         if (bybit is null || !bybit.HasQuote)
         {
             flags |= DataHealthFlags.BybitMissing | DataHealthFlags.BybitUnhealthy;
         }
-        else if (bybit.DataAge.TotalMilliseconds > _settings.QuoteStalenessThresholdMs)
+        else if (!bybit.IsConnected)
         {
-            flags |= DataHealthFlags.BybitStale | DataHealthFlags.BybitUnhealthy;
+            flags |= DataHealthFlags.BybitUnhealthy;
         }
 
         return new MarketDataSnapshot(_settings.Symbol, nowUtc, binance, bybit, flags);
@@ -216,29 +223,21 @@ public sealed class ScannerWorker : BackgroundService
 
     private async Task DetectHealthTransitionsAsync(MarketDataSnapshot snapshot, CancellationToken cancellationToken)
     {
-        await CheckExchangeHealthAsync(snapshot.Binance, DataHealthFlags.BinanceStale, ExchangeId.Binance, cancellationToken);
-        await CheckExchangeHealthAsync(snapshot.Bybit, DataHealthFlags.BybitStale, ExchangeId.Bybit, cancellationToken);
+        await CheckExchangeHealthAsync(snapshot.Binance, ExchangeId.Binance, () => _binanceAdapter.ProbeHealthAsync(cancellationToken), cancellationToken);
+        await CheckExchangeHealthAsync(snapshot.Bybit, ExchangeId.Bybit, () => _bybitAdapter.ProbeHealthAsync(cancellationToken), cancellationToken);
     }
 
     private async Task CheckExchangeHealthAsync(
         ExchangeMarketSnapshot? exchangeSnapshot,
-        DataHealthFlags staleFlag,
         ExchangeId exchange,
+        Func<Task<(bool Success, string? FailureReason)>> probeHealthAsync,
         CancellationToken cancellationToken)
     {
-        var isHealthy = exchangeSnapshot is not null &&
-                        exchangeSnapshot.HasQuote &&
-                        exchangeSnapshot.DataAge.TotalMilliseconds <= _settings.QuoteStalenessThresholdMs;
-        var isStale = exchangeSnapshot is not null &&
-                      exchangeSnapshot.HasQuote &&
-                      exchangeSnapshot.DataAge.TotalMilliseconds > _settings.QuoteStalenessThresholdMs;
-        var nowUtc = DateTimeOffset.UtcNow;
+        var (isHealthy, errorMessage) = await EvaluateExchangeHealthAsync(exchangeSnapshot, exchange, probeHealthAsync);
 
         if (!_wasHealthyByExchange.TryGetValue(exchange, out var previousHealthy))
         {
             _wasHealthyByExchange[exchange] = isHealthy;
-            _wasStaleByExchange[exchange] = false;
-            _staleCandidateSinceByExchange[exchange] = isStale ? nowUtc : null;
             if (isHealthy)
             {
                 await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeConnected, exchange, DataHealthFlags.None, true, $"{exchange} quote stream connected"), cancellationToken);
@@ -247,49 +246,107 @@ public sealed class ScannerWorker : BackgroundService
             return;
         }
 
-        if (!_wasStaleByExchange.TryGetValue(exchange, out var previousStaleConfirmed))
+        if (previousHealthy && !isHealthy)
         {
-            previousStaleConfirmed = false;
+            await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeError, exchange, BuildExchangeErrorFlags(exchangeSnapshot, exchange), false, errorMessage ?? $"{exchange} quote stream unhealthy"), cancellationToken);
         }
-
-        if (!_staleCandidateSinceByExchange.TryGetValue(exchange, out var staleCandidateSince))
-        {
-            staleCandidateSince = null;
-        }
-
-        if (isStale)
-        {
-            staleCandidateSince ??= nowUtc;
-            _staleCandidateSinceByExchange[exchange] = staleCandidateSince;
-
-            var staleDurationMs = (nowUtc - staleCandidateSince.Value).TotalMilliseconds;
-            if (!previousStaleConfirmed && staleDurationMs >= _settings.StaleConfirmationMs)
-            {
-                await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesDetected, exchange, staleFlag, false, $"{exchange} quotes became stale"), cancellationToken);
-                _logger.LogWarning("{Exchange} quotes became stale after {StaleDurationMs:0} ms above threshold", exchange, staleDurationMs);
-                previousStaleConfirmed = true;
-            }
-        }
-        else
-        {
-            _staleCandidateSinceByExchange[exchange] = null;
-
-            if (previousStaleConfirmed)
-            {
-                await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.StaleQuotesRecovered, exchange, DataHealthFlags.None, isHealthy, $"{exchange} quotes recovered from stale"), cancellationToken);
-                _logger.LogInformation("{Exchange} quotes recovered from stale", exchange);
-            }
-
-            previousStaleConfirmed = false;
-        }
-
-        if (!previousHealthy && isHealthy && !previousStaleConfirmed)
+        else if (!previousHealthy && isHealthy)
         {
             await PersistHealthEventAsync(new HealthEvent(DateTimeOffset.UtcNow, HealthEventType.ExchangeRecovered, exchange, DataHealthFlags.None, true, $"{exchange} quote stream recovered"), cancellationToken);
         }
 
         _wasHealthyByExchange[exchange] = isHealthy;
-        _wasStaleByExchange[exchange] = previousStaleConfirmed;
+    }
+
+    private async Task<(bool IsHealthy, string? ErrorMessage)> EvaluateExchangeHealthAsync(
+        ExchangeMarketSnapshot? exchangeSnapshot,
+        ExchangeId exchange,
+        Func<Task<(bool Success, string? FailureReason)>> probeHealthAsync)
+    {
+        if (exchangeSnapshot is null || !exchangeSnapshot.HasQuote)
+        {
+            return (false, $"{exchange} quotes missing");
+        }
+
+        if (!exchangeSnapshot.IsConnected)
+        {
+            return (false, $"{exchange} quote stream disconnected");
+        }
+
+        if (!_settings.RestHealthProbeEnabled ||
+            exchangeSnapshot.LastUpdateUtc is null ||
+            exchangeSnapshot.DataAge.TotalMilliseconds < _settings.RestHealthProbeAfterMs)
+        {
+            ResetRestProbeState(exchange, exchangeSnapshot.LastUpdateUtc);
+            return (true, null);
+        }
+
+        var state = GetOrCreateRestProbeState(exchange);
+        if (state.LastObservedUpdateUtc != exchangeSnapshot.LastUpdateUtc)
+        {
+            state.LastObservedUpdateUtc = exchangeSnapshot.LastUpdateUtc;
+            state.LastSucceeded = null;
+            state.LastFailureReason = null;
+            state.LastProbeAtUtc = null;
+        }
+
+        var nowUtc = DateTimeOffset.UtcNow;
+        var shouldProbe = !state.LastProbeAtUtc.HasValue ||
+                          nowUtc - state.LastProbeAtUtc.Value >= TimeSpan.FromMilliseconds(_settings.RestHealthProbeCooldownMs);
+        if (shouldProbe)
+        {
+            var probeResult = await probeHealthAsync();
+            state.LastProbeAtUtc = nowUtc;
+            state.LastSucceeded = probeResult.Success;
+            state.LastFailureReason = probeResult.FailureReason;
+        }
+
+        return state.LastSucceeded == false
+            ? (false, state.LastFailureReason ?? $"{exchange} REST health probe failed")
+            : (true, null);
+    }
+
+    private RestProbeState GetOrCreateRestProbeState(ExchangeId exchange)
+    {
+        if (_restProbeStatesByExchange.TryGetValue(exchange, out var state))
+        {
+            return state;
+        }
+
+        state = new RestProbeState();
+        _restProbeStatesByExchange[exchange] = state;
+        return state;
+    }
+
+    private void ResetRestProbeState(ExchangeId exchange, DateTimeOffset? lastUpdateUtc)
+    {
+        var state = GetOrCreateRestProbeState(exchange);
+        state.LastObservedUpdateUtc = lastUpdateUtc;
+        state.LastSucceeded = null;
+        state.LastFailureReason = null;
+        state.LastProbeAtUtc = null;
+    }
+
+    private static DataHealthFlags BuildExchangeErrorFlags(ExchangeMarketSnapshot? exchangeSnapshot, ExchangeId exchange)
+    {
+        var flags = exchange switch
+        {
+            ExchangeId.Binance => DataHealthFlags.BinanceUnhealthy,
+            ExchangeId.Bybit => DataHealthFlags.BybitUnhealthy,
+            _ => DataHealthFlags.None
+        };
+
+        if (exchangeSnapshot is null || !exchangeSnapshot.HasQuote)
+        {
+            flags |= exchange switch
+            {
+                ExchangeId.Binance => DataHealthFlags.BinanceMissing,
+                ExchangeId.Bybit => DataHealthFlags.BybitMissing,
+                _ => DataHealthFlags.None
+            };
+        }
+
+        return flags;
     }
 
     private async Task GenerateReportsAsync(SummaryPeriod period, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken cancellationToken)
@@ -358,34 +415,31 @@ public sealed class ScannerWorker : BackgroundService
 
         switch (healthEvent.EventType)
         {
-            case HealthEventType.StaleQuotesDetected:
+            case HealthEventType.ExchangeError:
             {
                 if (cooldown > TimeSpan.Zero &&
-                    state.LastStaleNotificationAtUtc.HasValue &&
-                    nowUtc - state.LastStaleNotificationAtUtc.Value < cooldown)
+                    state.LastProblemNotificationAtUtc.HasValue &&
+                    nowUtc - state.LastProblemNotificationAtUtc.Value < cooldown)
                 {
-                    state.HasActiveStaleNotification = false;
+                    state.HasActiveProblemNotification = false;
                     return false;
                 }
 
-                state.LastStaleNotificationAtUtc = nowUtc;
-                state.HasActiveStaleNotification = true;
-                return true;
-            }
-
-            case HealthEventType.StaleQuotesRecovered:
-            {
-                if (!state.HasActiveStaleNotification)
-                {
-                    return false;
-                }
-
-                state.HasActiveStaleNotification = false;
+                state.LastProblemNotificationAtUtc = nowUtc;
+                state.HasActiveProblemNotification = true;
                 return true;
             }
 
             case HealthEventType.ExchangeRecovered:
-                return false;
+            {
+                if (!state.HasActiveProblemNotification)
+                {
+                    return false;
+                }
+
+                state.HasActiveProblemNotification = false;
+                return true;
+            }
 
             default:
                 return false;

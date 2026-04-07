@@ -79,8 +79,9 @@ Important app settings:
 - `BaseAsset`
 - `QuoteAsset`
 - `ScanIntervalMs`
-- `QuoteStalenessThresholdMs`
-- `StaleConfirmationMs`
+- `RestHealthProbeEnabled`
+- `RestHealthProbeAfterMs`
+- `RestHealthProbeCooldownMs`
 - `TestNotionalsUsd`
 - `BinanceTakerFeeRate`
 - `BybitTakerFeeRate`

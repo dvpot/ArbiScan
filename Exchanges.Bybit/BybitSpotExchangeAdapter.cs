@@ -127,6 +127,32 @@ public sealed class BybitSpotExchangeAdapter : IExchangeAdapter, IDisposable
             _errorCount);
     }
 
+    public async Task<(bool Success, string? FailureReason)> ProbeHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(_restClient);
+            var result = await _restClient.V5Api.ExchangeData.GetSpotTickersAsync(_symbol, cancellationToken);
+            if (!result.Success || result.Data is null || !result.Data.List.Any())
+            {
+                return (false, $"Bybit REST probe failed: {result.Error}");
+            }
+
+            var ticker = result.Data.List[0];
+            if (ticker.BestBidPrice <= 0m || ticker.BestAskPrice <= 0m)
+            {
+                return (false, "Bybit REST probe returned empty top-of-book");
+            }
+
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Bybit REST health probe failed for {Symbol}", _symbol);
+            return (false, $"Bybit REST probe exception: {ex.Message}");
+        }
+    }
+
     public void Dispose()
     {
         _orderBook?.Dispose();

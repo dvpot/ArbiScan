@@ -45,7 +45,7 @@ public sealed class SummaryAndHealthGeneratorTests
     }
 
     [Fact]
-    public void HealthReportGenerator_CalculatesStaleAndUnhealthyDurations()
+    public void HealthReportGenerator_CalculatesReconnectsErrorsAndUnhealthyDurations()
     {
         var generator = new HealthReportGenerator();
         var fromUtc = new DateTimeOffset(2026, 04, 05, 0, 0, 0, TimeSpan.Zero);
@@ -54,8 +54,8 @@ public sealed class SummaryAndHealthGeneratorTests
 
         var events = new[]
         {
-            new HealthEvent(fromUtc.AddMinutes(1), HealthEventType.StaleQuotesDetected, ExchangeId.Binance, DataHealthFlags.BinanceStale | DataHealthFlags.BinanceUnhealthy, false, "Binance stale"),
-            new HealthEvent(fromUtc.AddMinutes(3), HealthEventType.StaleQuotesRecovered, ExchangeId.Binance, DataHealthFlags.None, true, "Binance recovered"),
+            new HealthEvent(fromUtc.AddMinutes(1), HealthEventType.ExchangeError, ExchangeId.Binance, DataHealthFlags.BinanceUnhealthy, false, "Binance disconnected"),
+            new HealthEvent(fromUtc.AddMinutes(3), HealthEventType.ExchangeRecovered, ExchangeId.Binance, DataHealthFlags.None, true, "Binance recovered"),
             new HealthEvent(fromUtc.AddMinutes(4), HealthEventType.ExchangeRecovered, ExchangeId.Bybit, DataHealthFlags.None, true, "Bybit reconnected"),
             new HealthEvent(fromUtc.AddMinutes(6), HealthEventType.ExchangeError, ExchangeId.Bybit, DataHealthFlags.BybitUnhealthy, false, "Bybit error"),
             new HealthEvent(fromUtc.AddMinutes(8), HealthEventType.ExchangeRecovered, ExchangeId.Bybit, DataHealthFlags.None, true, "Bybit healthy again")
@@ -64,11 +64,9 @@ public sealed class SummaryAndHealthGeneratorTests
         var report = generator.Generate(SummaryPeriod.Hourly, fromUtc, toUtc, "XRPUSDT", startedAtUtc, events);
 
         Assert.Equal(900000, report.UptimeMs);
-        Assert.Equal(2, report.ReconnectCount);
-        Assert.Equal(1, report.StaleCount);
-        Assert.Equal(120000, report.MaxStaleDurationMs);
+        Assert.Equal(3, report.ReconnectCount);
         Assert.Equal(240000, report.TotalDegradedDurationMs);
-        Assert.Equal(1, report.MarketDataErrorCount);
+        Assert.Equal(2, report.MarketDataErrorCount);
         Assert.Equal(120000, report.UnhealthyDurationMsByExchange["Binance"]);
         Assert.Equal(120000, report.UnhealthyDurationMsByExchange["Bybit"]);
     }

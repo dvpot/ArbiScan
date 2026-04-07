@@ -8,8 +8,6 @@ public sealed record HealthReport(
     string Symbol,
     long UptimeMs,
     int ReconnectCount,
-    int StaleCount,
-    long MaxStaleDurationMs,
     long TotalDegradedDurationMs,
     int MarketDataErrorCount,
     IReadOnlyDictionary<string, long> UnhealthyDurationMsByExchange,

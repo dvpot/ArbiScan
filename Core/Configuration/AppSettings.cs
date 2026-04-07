@@ -17,11 +17,13 @@ public sealed class AppSettings
     [Range(50, 10_000)]
     public int ScanIntervalMs { get; init; } = 250;
 
-    [Range(1, 86_400_000)]
-    public int QuoteStalenessThresholdMs { get; init; } = 2_000;
+    public bool RestHealthProbeEnabled { get; init; } = true;
 
-    [Range(0, 86_400_000)]
-    public int StaleConfirmationMs { get; init; } = 5_000;
+    [Range(1, 86_400_000)]
+    public int RestHealthProbeAfterMs { get; init; } = 5_000;
+
+    [Range(1, 86_400_000)]
+    public int RestHealthProbeCooldownMs { get; init; } = 30_000;
 
     [Range(60, 86_400)]
     public int CumulativeSummaryIntervalSeconds { get; init; } = 3_600;
